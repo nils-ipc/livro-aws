@@ -1,53 +1,39 @@
 # Do notebook para o mundo
 
-Você sabe escrever software. Sabe modelar um banco, desenhar uma API, montar uma interface em React, escrever testes que pegam bug antes do usuário. O que talvez você nunca tenha precisado fazer é a parte que acontece depois do `git push`: colocar aquilo no ar, manter no ar e descobrir por que caiu às 3h da manhã. Em muitas empresas, alguém do time de infraestrutura cuidava disso. Este livro é para o dia em que esse alguém não está lá.
+Este livro foi escrito para quem já constrói aplicações completas, do banco de dados ao botão na tela, mas sempre teve alguém (ou alguma plataforma mágica) cuidando de onde elas rodam. Você sabe escrever uma API, sabe montar um front em React, sabe depurar uma query lenta. O que acontece entre o `git push` e o usuário abrindo o app no celular continua meio nebuloso. É esse trecho que vamos percorrer juntos.
 
-O livro tem duas partes. Na primeira, com seis capítulos, você vai aprender o vocabulário e os conceitos de infraestrutura que a AWS pressupõe que você já conhece: redes, DNS, TLS, servidores, containers, escala, filas, backups, deploy, observabilidade. Sem AWS ainda. A ideia é que, quando você abrir o console pela primeira vez, as palavras na tela façam sentido. Na segunda parte, com dezoito capítulos, cada um desses conceitos volta, agora implementado com os serviços da AWS, em profundidade e com comandos de verdade.
+O livro tem duas partes. Na Parte I, que começa agora, você vai ver os conceitos de infraestrutura e DevOps sem nenhum provedor de nuvem no meio: redes, DNS, servidores, containers, escala, filas, backups, deploy. A ideia é montar o vocabulário e entender o porquê de cada peça. Na Parte II, a partir do capítulo 7, cada um desses conceitos volta, agora implementado na AWS e com profundidade.
 
-O tempo todo, vamos trabalhar com um único projeto.
+Para não ficar só na teoria, vamos acompanhar um único projeto do começo ao fim: o **Rangô**, um app de pedidos de comida. O cliente escolhe um restaurante, monta o pedido, paga e acompanha a entrega. Hoje ele vive inteiro no seu notebook. No último capítulo, ele estará em produção na AWS, aguentando tráfego, com backups, monitoramento e uma fatura que não assusta ninguém.
 
-## Conheça o Rangô
+### Conhecendo o Rangô
 
-O **Rangô** é um aplicativo de pedidos de comida. Restaurantes cadastram o cardápio, clientes fazem pedidos, o restaurante confirma, o entregador leva. Nada que você não conseguiria construir num fim de semana prolongado, e é justamente essa a graça: a aplicação é simples o bastante para não roubar a atenção, e realista o bastante para enfrentar os problemas de qualquer sistema em produção.
+O Rangô tem um backend em **FastAPI** e um frontend em React, criado com Vite. Os dados ficam num PostgreSQL rodando localmente.
 
-O Rangô tem duas partes:
+Se você vem do Flask, o FastAPI vai parecer familiar logo de cara. As rotas também são funções decoradas com `@app.get` ou `@app.post`. A diferença principal é que ele usa as anotações de tipo do Python para validar a entrada e gerar a documentação da API automaticamente, e aceita funções `async` sem cerimônia. Quem roda a aplicação é o **Uvicorn**, um servidor ASGI (o equivalente assíncrono do WSGI que o Gunicorn usa com Flask e Django).
 
-- um backend em **FastAPI**, que expõe a API de cardápios e pedidos e conversa com um banco PostgreSQL;
-- um frontend em **React**, criado com Vite, que consome essa API.
-
-Hoje ele roda inteiro no seu notebook. A estrutura de pastas é esta:
-
-```text
-rango/
-├── backend/
-│   ├── app/
-│   │   └── main.py
-│   └── requirements.txt
-└── frontend/
-    ├── src/
-    │   └── App.tsx
-    └── package.json
-```
-
-O ponto de partida do backend é pequeno. Um endpoint de saúde e uma listagem de restaurantes, ainda com dados fixos em memória para simplificar:
+Por enquanto, o backend do Rangô é bem pequeno. Ele tem uma rota de saúde e uma lista fixa de restaurantes, guardada em memória enquanto o banco não entra em cena:
 
 ```python
 # backend/app/main.py
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Rangô")
 
+origens = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_methods=["*"],
+    allow_origins=origens,
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
 RESTAURANTES = [
-    {"id": 1, "nome": "Cantina da Nona", "categoria": "italiana"},
-    {"id": 2, "nome": "Sabor do Sertão", "categoria": "nordestina"},
+    {"id": 1, "nome": "Cantina da Nona", "cozinha": "italiana"},
+    {"id": 2, "nome": "Sabor do Sertão", "cozinha": "nordestina"},
 ]
 
 
@@ -61,200 +47,228 @@ def listar_restaurantes():
     return RESTAURANTES
 ```
 
-E o frontend busca a lista assim:
+O frontend busca essa lista e mostra na tela:
 
 ```tsx
 // frontend/src/App.tsx
 import { useEffect, useState } from "react";
 
-type Restaurante = { id: number; nome: string; categoria: string };
+type Restaurante = { id: number; nome: string; cozinha: string };
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default function App() {
   const [restaurantes, setRestaurantes] = useState<Restaurante[]>([]);
 
   useEffect(() => {
     fetch(`${API_URL}/restaurantes`)
-      .then((resp) => resp.json())
+      .then((resposta) => resposta.json())
       .then(setRestaurantes);
   }, []);
 
   return (
-    <ul>
-      {restaurantes.map((r) => (
-        <li key={r.id}>{r.nome}</li>
-      ))}
-    </ul>
+    <main>
+      <h1>Rangô</h1>
+      <ul>
+        {restaurantes.map((r) => (
+          <li key={r.id}>
+            {r.nome} ({r.cozinha})
+          </li>
+        ))}
+      </ul>
+    </main>
   );
 }
 ```
 
-Para rodar, são dois terminais, como você já faz no dia a dia (os pré-requisitos são Python 3.12+ com `fastapi` e `uvicorn` instalados, e Node.js 20+):
+Para rodar, você precisa de Python 3.12 ou mais recente e Node.js 20 ou mais recente. Em dois terminais:
 
 ```bash
-# terminal 1
-cd rango/backend
-uvicorn app.main:app --reload
+# Terminal 1: backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate        # no Windows: .venv\Scripts\activate
+pip install "fastapi[standard]"
+uvicorn app.main:app --reload --port 8000
+```
 
-# terminal 2
-cd rango/frontend
+```bash
+# Terminal 2: frontend
+cd frontend
+npm install
 npm run dev
 ```
 
-O Uvicorn avisa que a API está em `http://127.0.0.1:8000`, o Vite avisa que o frontend está em `http://localhost:5173`, você abre o navegador e lá estão a Cantina da Nona e o Sabor do Sertão. Funciona.
+Abra `http://localhost:5173` no navegador e os dois restaurantes aparecem. Funciona. Os problemas começam quando outra pessoa tenta abrir.
 
-Ao longo do livro, esse projeto vai sair do seu notebook e terminar em produção na AWS, com banco gerenciado, containers, deploy automático, monitoramento e uma fatura que você entende. Mas tudo começa com uma pergunta bem mais simples.
+## O link que não abriu
 
-## O link que não abre
+A sua sócia no Rangô mora em Recife. Ela cuida da parte comercial e quer ver o app antes de mostrar para os primeiros restaurantes parceiros. Você, animado, manda uma mensagem: "Está rodando, abre aí: http://localhost:5173".
 
-Sua sócia no Rangô mora em Recife. Você mora em Porto Alegre. Ela quer ver o protótipo, e você manda no chat:
+Dois minutos depois, chega a resposta com um print. O navegador dela mostra "Não é possível acessar esse site. A conexão com localhost foi recusada."
 
-```text
-Dá uma olhada: http://localhost:5173
-```
+Você pensa um pouco e lembra que `localhost` é a sua máquina. Abre o terminal, descobre que o seu notebook tem o endereço `192.168.0.12` e manda de novo: "Tenta http://192.168.0.12:5173". Desta vez o navegador dela fica girando por quase meio minuto até desistir com um erro de tempo esgotado.
 
-Ela abre o link e o navegador responde com algo como "Não é possível acessar esse site. A conexão com localhost foi recusada." Ela manda um print. Você testa de novo aí do seu lado e funciona perfeitamente.
+Repare que os dois erros são diferentes. No primeiro, alguém respondeu "não" na hora. No segundo, ninguém respondeu nada. Essa diferença, que parece detalhe, diz muito sobre o que está acontecendo, e você vai aprender a ler esse tipo de sinal ao longo deste capítulo.
 
-A explicação curta você provavelmente já conhece: `localhost` significa "esta máquina". Quando sua sócia abre `localhost:5173`, o navegador dela procura um programa ouvindo na porta 5173 do notebook dela, em Recife. Não há nenhum, e a conexão é recusada.
+A pergunta que fica é simples de fazer e trabalhosa de responder: o que precisa acontecer para que uma requisição saia do celular da sua sócia, em Recife, atravesse o país e chegue ao processo do Uvicorn rodando no seu notebook? Para responder, vamos seguir o caminho dessa requisição peça por peça.
 
-A explicação longa é o assunto deste capítulo. Porque a pergunta seguinte é inevitável: se `localhost` não serve, qual endereço eu mando? E aí as perguntas se multiplicam. Qual é o endereço do meu notebook? Por que o comando que mostra o meu IP dá um número e o site "qual é o meu IP" dá outro? Por que, mesmo com o número certo, ela continua sem acessar? Por que o Uvicorn diz `127.0.0.1` e o Vite diz `localhost`, e isso faz diferença?
+## Localhost: o endereço que nunca sai de casa
 
-Para responder, vamos acompanhar o caminho de uma requisição entre o navegador em Recife e o processo Python no seu notebook. Cada etapa tem um conceito de rede por trás, e todos eles voltam quando você criar sua primeira rede na AWS.
+Quando você digita `localhost`, o sistema operacional traduz esse nome para `127.0.0.1` (ou `::1`, a versão em IPv6). Esse endereço pertence a uma interface de rede especial chamada **loopback**. Ela existe só em software, e tudo o que entra nela volta para a própria máquina. Nenhum pacote enviado para `127.0.0.1` passa pelo Wi-Fi ou pelo cabo.
 
-## Endereços: o IP
+Por isso o primeiro link falhou de forma tão rápida. O navegador da sua sócia tentou se conectar ao `localhost` dela, ou seja, ao celular dela. Lá não havia nada escutando na porta 5173, e o próprio sistema do celular respondeu na hora: conexão recusada.
 
-Toda máquina conectada a uma rede tem pelo menos um endereço. Na internet, esse endereço é o **IP** (de *Internet Protocol*). A versão mais comum ainda é o IPv4, que você já viu mil vezes: quatro números de 0 a 255 separados por pontos, como `192.168.0.15` ou `203.0.113.42`.
+Toda máquina tem o seu próprio `localhost`. Mandar esse endereço para alguém é como dizer "passa aqui em casa" sem dizer onde fica a casa.
 
-Cada um desses números ocupa 8 bits, então um endereço IPv4 tem 32 bits no total, o que dá cerca de 4,3 bilhões de endereços. Parecia muito na década de 1980. Hoje há mais celulares no mundo do que isso, e os endereços IPv4 acabaram há anos. O mundo encontrou dois remédios. O primeiro é o IPv6, com endereços de 128 bits (como `2001:db8::1`), que resolve a escassez de vez mas ainda convive com o IPv4 em quase toda a internet. O segundo é um truque chamado NAT, que você vai entender daqui a pouco e que explica boa parte da confusão do início do capítulo.
+## Endereços IP: o CEP de cada máquina
 
-Por enquanto, guarde o seguinte: um IP identifica uma **interface de rede**, e uma mesma máquina pode ter vários. Seu notebook tem pelo menos dois:
+Para uma máquina encontrar outra, cada uma precisa de um endereço. Na internet, esse endereço é o **endereço IP** (de *Internet Protocol*). Na versão mais usada, o **IPv4**, ele tem 32 bits, escritos como quatro números de 0 a 255 separados por pontos: `192.168.0.12`, `200.147.67.142`, `8.8.8.8`.
 
-- `127.0.0.1`, o endereço de **loopback**. Ele nunca sai da máquina. Qualquer pacote enviado para lá volta para o próprio computador, sem passar pela placa de rede. `localhost` é apenas um nome que aponta para esse endereço.
-- O endereço da interface Wi-Fi ou cabeada, algo como `192.168.0.15`, que identifica seu notebook na rede da sua casa.
+Um detalhe que costuma surpreender: o IP pertence a uma **interface de rede**, e uma máquina pode ter várias. O seu notebook tem pelo menos duas: a loopback, com `127.0.0.1`, e a placa de Wi-Fi, com algo como `192.168.0.12`. Se você conectar um cabo de rede, ganha uma terceira, com outro IP.
 
-Com isso, o comportamento do Uvicorn se explica. Quando ele diz `Uvicorn running on http://127.0.0.1:8000`, está dizendo que só aceita conexões que chegam pela interface de loopback. Quem está dentro da sua máquina consegue falar com ele. Quem está fora, mesmo na mesma sala, não consegue.
+Com 32 bits, cabem cerca de 4,3 bilhões de endereços IPv4. Parecia muito nos anos 1980. Hoje existem mais celulares do que isso, e os blocos livres de IPv4 já se esgotaram nos registros regionais que distribuem esses endereços. A resposta de longo prazo é o **IPv6**, com 128 bits e endereços como `2804:14c:65:8a00::1`. Ele já carrega boa parte do tráfego no Brasil, mas o IPv4 continua presente em quase tudo, e foram as gambiarras para fazer o IPv4 durar que criaram metade dos conceitos deste capítulo. Vamos chegar nelas.
 
-## Portas: qual programa atende
+## Portas: o apartamento dentro do prédio
 
-O IP leva o pacote até a máquina certa. Mas numa máquina há dezenas de programas usando a rede ao mesmo tempo: o Uvicorn, o Vite, o PostgreSQL, o navegador, o cliente de chat. Como o sistema operacional sabe para qual deles entregar cada pacote que chega?
+O IP leva a requisição até a máquina certa. Só que no seu notebook rodam dezenas de programas que usam a rede ao mesmo tempo: o Uvicorn, o Vite, o PostgreSQL, o navegador, o Slack. Quando um pacote chega, como o sistema operacional sabe para qual deles entregar?
 
-Pela **porta**. A porta é um número de 0 a 65535 que identifica um ponto de entrada dentro da máquina. Um programa que quer receber conexões pede ao sistema operacional para **ouvir** (*listen*) numa porta. A partir daí, tudo que chega naquele IP e naquela porta é entregue a ele.
+É para isso que existem as **portas**. Uma porta é um número de 0 a 65535 que identifica um processo escutando conexões naquela máquina. Se o IP é o endereço do prédio, a porta é o número do apartamento.
 
-No Rangô, você tem três portas em uso:
+Essa analogia pode ir um passo além, com algo que você já conhece. Numa URL como `http://192.168.0.12:8000/restaurantes`, cada pedaço resolve um nível:
 
-| Porta | Programa | Quem conversa com ele |
-|-------|----------|----------------------|
-| 8000 | Uvicorn (API FastAPI) | O frontend, pelo navegador |
-| 5173 | Vite (servidor de desenvolvimento do React) | O navegador |
-| 5432 | PostgreSQL | O backend |
+- o IP (`192.168.0.12`) escolhe a máquina;
+- a porta (`8000`) escolhe o processo dentro dela, no caso o Uvicorn;
+- o caminho (`/restaurantes`) escolhe a função dentro do processo, a que tem o decorator `@app.get("/restaurantes")`.
 
-Pense no IP como o endereço de um prédio e na porta como o número do apartamento. A analogia de desenvolvedor também funciona: o IP escolhe o servidor, a porta escolhe o processo, e o caminho da URL (`/restaurantes`) escolhe a função dentro do processo, que é o trabalho do roteador do FastAPI.
+O roteamento do FastAPI faz, dentro da aplicação, o que o IP e a porta fazem na rede.
 
-Algumas portas têm dono por convenção. HTTP usa 80, HTTPS usa 443, SSH usa 22, PostgreSQL usa 5432. É por isso que você digita `https://github.com` e não `https://github.com:443`: o navegador presume a porta padrão do protocolo. Portas abaixo de 1024 são chamadas de **portas privilegiadas**, e em Linux e macOS um programa comum precisa de permissão especial para ouvir nelas. Esse detalhe vai voltar no capítulo 3, quando colocarmos um proxy reverso na frente da API.
+Algumas portas viraram convenção. HTTP usa a 80, HTTPS usa a 443, SSH usa a 22 e o PostgreSQL usa a 5432. Quando você digita `https://google.com` sem porta, o navegador assume a 443. As portas abaixo de 1024 são chamadas de **privilegiadas**: em Linux, um processo comum precisa de permissão especial para escutar nelas. É por isso que, no desenvolvimento, usamos 8000 e 5173 em vez de 80. No capítulo 3, você vai ver como um servidor em produção resolve isso com um proxy reverso.
 
-Repare numa coisa: a combinação de IP e porta precisa estar livre. Se você tentar subir um segundo Uvicorn na porta 8000, ele falha com `[Errno 48] Address already in use` no macOS (ou `[Errno 98]` no Linux). Esse erro você provavelmente já viu. Agora sabe o que ele quer dizer: outro processo já está ouvindo naquele IP e naquela porta.
+Uma porta só pode ter um dono por vez, para um mesmo endereço. Se você tentar subir um segundo Uvicorn na 8000 enquanto o primeiro está rodando, recebe o famoso `[Errno 48] Address already in use` (no Linux, o número do erro é 98). A mensagem quer dizer exatamente isso: o apartamento já tem morador.
+
+### Escutar em qual endereço?
+
+Lembra que o notebook tem várias interfaces, cada uma com um IP? Quando um processo começa a escutar numa porta, ele escolhe também em qual endereço vai escutar. Esse passo se chama *bind*.
+
+O Uvicorn, por padrão, faz bind em `127.0.0.1`. Ele aceita conexões que chegam pela loopback e ignora as que chegam pelo Wi-Fi. É uma escolha segura: você não quer que qualquer pessoa no Wi-Fi da cafeteria acesse a sua API de desenvolvimento. O Vite faz o mesmo.
+
+Para aceitar conexões de outras máquinas, você precisa fazer bind em `0.0.0.0`. Nesse contexto, `0.0.0.0` significa "todas as interfaces desta máquina". Guarde essa distinção, porque ela vai aparecer de novo na seção de armadilhas, em uma história nada agradável.
 
 ## TCP e UDP: como a conversa acontece
 
-Saber o endereço e a porta resolve o "para onde". Falta o "como". Na internet, os dados viajam em pedaços chamados **pacotes**, e cada pacote é tratado de forma independente. Pacotes podem se perder, chegar fora de ordem ou chegar duplicados. Alguém precisa lidar com isso, e na maior parte dos casos esse alguém é o **TCP** (*Transmission Control Protocol*).
+Saber o IP e a porta permite que um pacote chegue ao destino. Mas uma requisição HTTP com uma resposta de alguns megabytes vira centenas de pacotes. Eles podem se perder no caminho, chegar fora de ordem ou chegar duplicados. Alguém precisa organizar essa bagunça, e é aí que entram os protocolos de transporte.
 
-O TCP cria uma **conexão** entre os dois lados antes de enviar qualquer dado. Essa abertura é o famoso *three-way handshake*:
+O **TCP** (*Transmission Control Protocol*) cria uma conexão confiável entre os dois lados. Antes de qualquer dado, os dois lados fazem o *three-way handshake*, um aperto de mão em três passos:
 
 ```text
-navegador                          servidor (porta 8000)
-    |  ---- SYN ------------------->  |   "quero conversar"
-    |  <--- SYN-ACK ----------------  |   "pode falar, também quero"
-    |  ---- ACK ------------------->  |   "combinado"
-    |                                 |
-    |  ---- GET /restaurantes ----->  |   agora sim, o HTTP
-    |  <--- 200 OK + JSON ----------  |
+Cliente                          Servidor
+   |  ---- SYN ------------------>  |   "quero conversar"
+   |  <--- SYN-ACK ---------------  |   "ok, eu também"
+   |  ---- ACK ------------------>  |   "combinado"
+   |                                |
+   |  ==== dados (HTTP) =========>  |
 ```
 
-Depois disso, o TCP numera cada pedaço enviado, confirma o que chegou, reenvia o que se perdeu e entrega tudo ao programa na ordem certa. Para o FastAPI, a requisição chega inteira e organizada. Ele nunca fica sabendo que um pacote se perdeu no meio do caminho e precisou ser reenviado.
+Depois disso, o TCP numera cada pedaço de dado, confirma o que recebeu, reenvia o que se perdeu e entrega tudo na ordem certa para a aplicação. O Uvicorn nunca vê um pacote perdido. Ele recebe a requisição inteira, como se a rede fosse perfeita. HTTP/1.1 e HTTP/2, que carregam praticamente todas as APIs que você já escreveu, rodam sobre TCP.
 
-Lembra a mensagem "A conexão com localhost foi recusada"? Ela vem daqui. O navegador da sua sócia mandou um SYN para a porta 5173 da máquina dela, e o sistema operacional respondeu com um pacote de recusa (um RST), porque nenhum programa ouvia ali. Uma conexão recusada é uma resposta rápida e clara: a máquina existe, mas a porta está fechada. Guarde essa diferença, porque existe outro erro, o *timeout*, que significa algo bem diferente e vai aparecer na seção de armadilhas.
+O handshake explica os dois erros que a sua sócia viu. Quando o navegador manda um SYN para uma máquina que existe, mas não tem ninguém escutando naquela porta, o sistema operacional dessa máquina responde com um pacote **RST** (*reset*). O navegador traduz isso como "conexão recusada", e acontece em milissegundos. Quando o SYN nunca chega a lugar nenhum, ou chega e é descartado em silêncio, o navegador fica esperando um SYN-ACK que nunca vem. Depois de algumas tentativas, desiste com um *timeout*.
 
-O outro protocolo de transporte importante é o **UDP** (*User Datagram Protocol*). Ele não faz handshake, não confirma entrega e não reordena nada. Serve quando a resposta é pequena e rápida, ou quando um dado atrasado já perdeu o valor. As consultas de DNS usam UDP na maior parte do tempo, e chamadas de vídeo também, porque um quadro que chega meio segundo atrasado já não serve para nada. O HTTP/3 roda sobre o QUIC, um protocolo construído em cima do UDP que reimplementa as garantias que interessam.
+Essa diferença vale ouro na hora de investigar problemas de rede:
 
-Para o Rangô, por enquanto, tudo é TCP: HTTP do navegador para a API, e a conexão da API com o PostgreSQL. Quando você configurar regras de firewall na AWS, vai precisar escolher entre TCP e UDP para cada porta liberada, e agora você sabe o que está escolhendo.
+| Sintoma | O que provavelmente aconteceu |
+|---------|-------------------------------|
+| Conexão recusada, na hora | A máquina foi encontrada, mas nada escuta naquela porta (ou o processo fez bind só em `127.0.0.1`) |
+| Timeout, depois de vários segundos | O pacote não chegou: endereço inalcançável, firewall descartando ou rota inexistente |
 
-## Roteamento: o caminho até o destino
+O **UDP** (*User Datagram Protocol*) segue o caminho oposto. Ele não faz handshake, não confirma recebimento e não reenvia nada. Manda o pacote e pronto. Parece pior, mas é a escolha certa quando rapidez importa mais do que garantia: numa chamada de vídeo, um quadro perdido deve ser simplesmente ignorado, porque reenviá-lo meio segundo depois só atrapalharia. O DNS, que você vai conhecer no próximo capítulo, usa UDP na maior parte das consultas. E o HTTP/3 roda sobre o QUIC, um protocolo construído em cima do UDP que reimplementa a confiabilidade do seu próprio jeito.
 
-Seu notebook sabe o IP de destino. Mas ele não tem um cabo ligado diretamente a cada computador do mundo. Como o pacote chega lá?
+## Roteamento: de salto em salto até o destino
 
-Passando de mão em mão. Cada equipamento no caminho é um **roteador**, e cada roteador tem uma **tabela de rotas** que responde a uma única pergunta: "para chegar a este destino, para quem eu entrego o pacote agora?". O roteador não conhece o caminho inteiro. Ele só conhece o próximo salto. O seguinte decide o salto depois, e assim por diante, até o pacote chegar à rede do destino.
+Agora você sabe como dois processos conversam quando um sabe o IP do outro. Mas entre o celular em Recife e o seu notebook existem dezenas de equipamentos. Quem decide o caminho?
 
-Seu notebook também tem uma tabela de rotas, e ela é curtíssima. Na prática, diz duas coisas: "endereços da minha rede local eu entrego direto" e "todo o resto eu mando para o **gateway padrão**". O gateway padrão, numa casa, é o roteador Wi-Fi que a operadora instalou.
+Ninguém decide o caminho inteiro. A internet funciona de salto em salto. Cada equipamento no meio do caminho, chamado **roteador**, olha o IP de destino do pacote, consulta a sua própria **tabela de rotas** e decide só qual é o próximo salto. O roteador seguinte faz o mesmo, e assim por diante. É parecido com pedir informação na rua: ninguém te explica o trajeto completo, cada pessoa só aponta para a próxima esquina.
 
-Se você já escreveu rotas no FastAPI, a lógica da tabela vai parecer familiar. O roteador compara o destino do pacote com as rotas que conhece e escolhe a **mais específica** que combina, do mesmo jeito que um framework web prefere `/restaurantes/destaques` a `/restaurantes/{id}` quando os dois casam com a URL. Essa regra se chama *longest prefix match*. A rota menos específica de todas, a que casa com qualquer destino, é a rota padrão, escrita como `0.0.0.0/0`. Ela é o `catch-all` da rede. Essa notação com barra vai ficar clara em algumas páginas, e `0.0.0.0/0` vai aparecer em praticamente toda configuração de rede que você fizer na AWS.
+O seu notebook também tem uma tabela de rotas, e ela costuma ser bem curta. Em geral diz duas coisas: "endereços da rede local, entregue direto" e "todo o resto, mande para o roteador de casa". Esse "todo o resto" é a **rota padrão**, e o roteador para onde ela aponta é o **gateway padrão**.
 
-Cada salto acrescenta um pouco de tempo. Um pacote do Brasil para um servidor na Virgínia, nos Estados Unidos, costuma levar mais de 100 milissegundos para ir e voltar, o que vai pesar na escolha de região quando chegarmos à AWS.
+Quando várias rotas servem para um mesmo destino, vence a mais específica. Esse critério se chama *longest prefix match*. Se você já escreveu rotas no FastAPI, conhece a ideia: uma rota `/restaurantes/destaques` precisa ser tratada antes de `/restaurantes/{id}`, senão a palavra "destaques" seria interpretada como um id. Na tabela de rotas, a rota padrão é escrita como `0.0.0.0/0`, que quer dizer "qualquer endereço". Ela é a menos específica de todas, uma espécie de rota curinga, usada só quando nenhuma outra serve. Em breve você vai entender exatamente o que esse `/0` significa.
 
 ## IP público, IP privado e o truque do NAT
 
-Agora a parte que explica a confusão do começo. Rode no seu notebook um comando para ver o IP da interface Wi-Fi (os comandos exatos estão na seção prática, logo adiante). Você vai ver algo como `192.168.0.15`. Depois abra um site que mostra "qual é o seu IP". Ele vai mostrar outro número, algo como `203.0.113.42`. Qual dos dois é o seu IP?
+Volte ao segundo link, o `http://192.168.0.12:5173`. Por que ele deu timeout?
 
-Os dois, em contextos diferentes.
+Porque `192.168.0.12` é um **IP privado**. Para adiar o esgotamento do IPv4, a RFC 1918 reservou três faixas de endereços para uso interno, que qualquer rede pode usar à vontade e que nunca são roteadas na internet pública:
 
-Lembra que os endereços IPv4 acabaram? Uma das soluções foi reservar algumas faixas de endereços para uso **privado**, dentro de redes locais. Esses endereços podem ser repetidos à vontade em redes diferentes, porque nunca aparecem na internet pública. As faixas, definidas na RFC 1918, são três:
+| Faixa | Notação CIDR | Uso típico |
+|-------|--------------|------------|
+| 10.0.0.0 a 10.255.255.255 | `10.0.0.0/8` | Empresas e redes na nuvem |
+| 172.16.0.0 a 172.31.255.255 | `172.16.0.0/12` | Empresas, redes do Docker |
+| 192.168.0.0 a 192.168.255.255 | `192.168.0.0/16` | Redes domésticas |
 
-| Faixa | Tamanho | Onde você costuma ver |
-|-------|---------|----------------------|
-| `10.0.0.0` a `10.255.255.255` | cerca de 16,7 milhões de endereços | Redes corporativas e redes na nuvem |
-| `172.16.0.0` a `172.31.255.255` | cerca de 1 milhão | Redes do Docker, algumas empresas |
-| `192.168.0.0` a `192.168.255.255` | 65.536 | Roteadores domésticos |
+Neste exato momento, milhões de casas usam o endereço `192.168.0.12`. Quando o celular da sua sócia tentou alcançá-lo, os roteadores entre ela e a internet não tinham rota para esse endereço fora da rede local dela. O pacote foi descartado em silêncio e o navegador esperou até desistir.
 
-O `192.168.0.15` do seu notebook é um **IP privado**. Milhões de notebooks no mundo têm exatamente esse mesmo endereço neste momento, cada um na sua própria rede doméstica. O IP que o site mostrou é um **IP público**: único na internet inteira, atribuído pela sua operadora ao seu roteador.
+Um **IP público**, por outro lado, é único no mundo inteiro e roteável na internet. O seu roteador de casa recebe um do provedor. Todas as máquinas da sua casa saem para a internet usando esse mesmo IP público. Como isso funciona?
 
-Então como o seu notebook, com um endereço que só vale dentro de casa, consegue abrir um site? Quem resolve isso é o roteador, com o **NAT** (*Network Address Translation*). Quando um pacote sai da sua rede, o roteador troca o IP de origem privado pelo IP público dele e anota a troca numa tabela. Quando a resposta volta, ele consulta a tabela e devolve o pacote ao notebook certo.
+### NAT: a portaria do condomínio
 
-A tabela de NAT parece um dicionário Python:
+O truque se chama **NAT** (*Network Address Translation*). Quando o seu notebook faz uma requisição para fora, o roteador troca o IP privado de origem (`192.168.0.12`) pelo IP público dele e anota essa troca numa tabela. Quando a resposta volta, ele consulta a tabela, descobre que aquela conexão pertence ao notebook e entrega o pacote para `192.168.0.12`.
 
-```text
-lado de dentro (privado)       lado de fora (público)        destino
-192.168.0.15:51234        ->   203.0.113.42:40001       ->   140.82.112.3:443
-192.168.0.22:49876        ->   203.0.113.42:40002       ->   140.82.112.3:443
-192.168.0.15:51240        ->   203.0.113.42:40003       ->   151.101.1.69:443
+Se você quiser pensar em código, a tabela do NAT é um dicionário Python mais ou menos assim:
+
+```python
+# Visão simplificada da tabela de NAT do roteador
+tabela_nat = {
+    # (IP público, porta pública): (IP privado, porta privada)
+    ("203.0.113.45", 51001): ("192.168.0.12", 62344),  # notebook
+    ("203.0.113.45", 51002): ("192.168.0.23", 49210),  # celular
+}
 ```
 
-Repare que dois aparelhos da casa podem acessar o mesmo site ao mesmo tempo, e o roteador os diferencia pela porta pública que escolheu para cada conexão. Para o mundo lá fora, existe uma única máquina em `203.0.113.42` fazendo muitas conexões.
+Os endereços `203.0.113.x` usados aqui fazem parte de uma faixa reservada para documentação (RFC 5737) e não pertencem a ninguém. Vamos usar essa faixa e a `198.51.100.x` em todos os exemplos de IP público do livro.
 
-O NAT tem uma consequência que responde à pergunta do capítulo. Ele funciona muito bem para conexões que **saem** da rede, porque o roteador cria a anotação na tabela quando o pacote sai. Uma conexão que **chega** de fora, sem ninguém ter pedido, não encontra anotação nenhuma. Quando sua sócia tenta se conectar a `203.0.113.42:5173`, o roteador recebe o pacote e não sabe para qual aparelho da casa entregá-lo. Então descarta.
+Agora pense no que acontece quando chega um pacote de fora que não responde a nenhuma requisição anterior. A sua sócia tenta se conectar ao IP público da sua casa, na porta 5173. O roteador procura na tabela, não encontra nenhuma entrada para aquela porta e descarta o pacote. Por isso o NAT, além de economizar endereços, funciona como uma barreira involuntária: conexões de entrada não solicitadas simplesmente não entram.
 
-Isso é ótimo para a segurança da sua rede doméstica e péssimo para quem quer mostrar um protótipo. É possível configurar o roteador para encaminhar uma porta específica para um aparelho interno (o *port forwarding*), mas há um obstáculo cada vez mais comum no Brasil, que veremos nas armadilhas.
+Existe um jeito de furar essa barreira, o *port forwarding*: você configura no roteador uma regra fixa do tipo "tudo que chegar na porta 5173 vai para `192.168.0.12`". Funciona, mas deixa a sua máquina exposta para a internet inteira, e não só para a sua sócia. Logo você vai ver por que isso é uma péssima ideia.
 
-Um aviso sobre os exemplos: os IPs públicos deste livro, como `203.0.113.42` e `198.51.100.7`, pertencem a faixas reservadas para documentação. Eles não pertencem a ninguém e servem justamente para exemplos.
+### CGNAT: quando nem o roteador tem IP público
 
-## Subnets e CIDR: dividindo endereços em blocos
+Em muitas conexões residenciais e quase todas as conexões móveis no Brasil, existe ainda uma segunda camada. O provedor coloca vários clientes atrás de um único IP público, fazendo NAT do lado dele. Isso se chama **CGNAT** (*Carrier-Grade NAT*). O roteador da sua casa recebe um endereço da faixa `100.64.0.0/10`, reservada para esse fim, e não um IP público de verdade.
 
-Quando falamos de "a sua rede doméstica", estamos falando de uma **subnet** (sub-rede): um bloco contínuo de endereços IP cujas máquinas conseguem se falar diretamente, sem passar por um roteador. Seu roteador Wi-Fi provavelmente usa o bloco de `192.168.0.0` a `192.168.0.255`. Todo aparelho com IP nesse intervalo está "na mesma rede".
+Com CGNAT, nem o port forwarding resolve, porque você não controla o NAT do provedor. Um jeito fácil de desconfiar disso é comparar o IP que o seu roteador mostra no painel de administração com o IP que um serviço externo enxerga. Se forem diferentes, há um NAT a mais no caminho.
 
-Para escrever esses blocos de forma compacta, usa-se a notação **CIDR** (*Classless Inter-Domain Routing*). O bloco acima vira `192.168.0.0/24`. O número depois da barra diz quantos bits, da esquerda para a direita, são fixos. Os bits restantes variam e formam os endereços dentro do bloco.
+## CIDR e subnets: fatiando endereços
 
-Se você já trabalhou com máscaras de bits, a ideia é a mesma. Um IPv4 tem 32 bits. Em `/24`, os primeiros 24 bits (os três primeiros números, `192.168.0`) são fixos, e os últimos 8 bits variam: 2⁸ = 256 endereços. Cada bit a menos na barra dobra o tamanho do bloco:
+Você já esbarrou em notações como `192.168.0.0/16` e `0.0.0.0/0`. Chegou a hora de entender o que essa barra quer dizer, porque ela vai acompanhar você por todo o livro e, na Parte II, vai aparecer em praticamente toda configuração de rede.
+
+Um IPv4 tem 32 bits. A notação **CIDR** (*Classless Inter-Domain Routing*) descreve um bloco de endereços dizendo quantos bits do começo são fixos. O número depois da barra é essa quantidade. Os bits restantes podem variar, e cada combinação é um endereço do bloco.
+
+Em `192.168.0.0/24`, os primeiros 24 bits (os três primeiros números, `192.168.0`) são fixos. Sobram 8 bits livres, que geram 2⁸ = 256 endereços, de `192.168.0.0` até `192.168.0.255`. A regra geral é que um bloco `/n` tem 2^(32−n) endereços. Quanto maior o número depois da barra, menor o bloco:
 
 | CIDR | Bits livres | Endereços | Exemplo |
 |------|-------------|-----------|---------|
-| `/32` | 0 | 1 | Um único IP, como `203.0.113.42/32` |
+| `/32` | 0 | 1 | Um único host |
 | `/28` | 4 | 16 | Uma subnet bem pequena |
 | `/24` | 8 | 256 | Uma rede doméstica típica |
-| `/16` | 16 | 65.536 | Uma rede inteira de uma empresa ou na nuvem |
-| `/0` | 32 | todos | A internet inteira, `0.0.0.0/0` |
+| `/16` | 16 | 65.536 | Uma rede corporativa ou de nuvem |
+| `/0` | 32 | Todos | A rota padrão, "qualquer lugar" |
 
-A rota padrão da seção anterior fica clara: `0.0.0.0/0` é o bloco com zero bits fixos, que contém todos os endereços IPv4. Na outra ponta, `/32` fixa todos os bits e representa um único IP. Quando você estiver configurando um firewall na AWS e quiser liberar o acesso só para o IP do seu escritório, vai escrever algo como `203.0.113.42/32`. Quando escrever `0.0.0.0/0`, está liberando para o planeta.
+Agora o `0.0.0.0/0` da tabela de rotas fica claro: zero bits fixos, qualquer endereço serve. O *longest prefix match* também. Uma rota para `192.168.0.0/24` fixa 24 bits, então é mais específica que `0.0.0.0/0`, que não fixa nenhum.
 
-Dentro de uma subnet, nem todo endereço pode ir para uma máquina. Tradicionalmente, o primeiro endereço identifica a própria rede e o último é o de *broadcast* (enviar para todos). A AWS reserva ainda mais: cinco endereços em cada subnet. Por isso uma subnet `/24` na AWS tem 251 endereços utilizáveis, e não 256. Detalhes como esse vão importar no capítulo 10.
+Na prática, nem todos os endereços de um bloco podem ser usados por máquinas. Em redes tradicionais, o primeiro endereço identifica a própria rede e o último é o de *broadcast*. A AWS vai além e reserva cinco endereços em cada subnet, então um bloco `/24` lá oferece 251 endereços utilizáveis. Você vai encontrar isso de novo no capítulo 10.
 
-Por que dividir endereços em subnets? Porque subnets são a unidade de organização e de isolamento de uma rede. Você pode decidir que uma subnet tem rota para a internet e outra não, e colocar o banco de dados na segunda. É exatamente isso que faremos com o Rangô na AWS: uma rede `/16` dividida em subnets menores, algumas públicas e outras privadas. Por enquanto, basta saber ler a notação.
+### Subnet: quem conversa direto com quem
 
-## Mão na massa: investigando a rede do seu notebook
+Uma **subnet** é um bloco de endereços cujas máquinas se falam diretamente, sem passar por um roteador. A rede da sua casa é uma subnet, quase sempre `192.168.0.0/24` ou `192.168.1.0/24`. Quando o notebook quer falar com o celular, que está em `192.168.0.23`, ele consulta a tabela de rotas, vê que o destino está na mesma subnet e entrega direto. Para qualquer outro destino, manda para o gateway.
 
-Chega de teoria. Vamos ver tudo isso acontecendo na sua máquina. Os comandos abaixo funcionam no macOS e no Linux; quando forem diferentes, os dois aparecem. No Windows, use o WSL para acompanhar.
+Subnets servem para organizar e para isolar. Numa empresa, você pode colocar os servidores numa subnet, os notebooks dos funcionários em outra e as impressoras numa terceira, controlando o que passa de uma para outra. Na nuvem, a separação mais comum é entre **subnets públicas**, que têm rota para a internet, e **subnets privadas**, que não têm. O servidor web fica na pública. O banco de dados fica na privada, onde ninguém de fora consegue chegar. Guarde essa imagem, porque o Rangô vai precisar dela.
 
-### Descobrindo seus IPs
+## Mão na massa: seguindo os pacotes do Rangô
 
-O IP privado da interface Wi-Fi:
+Chega de teoria. Vamos usar o terminal para enxergar tudo isso no seu próprio notebook e, no fim, colocar o Rangô no celular. Os comandos abaixo funcionam em macOS e Linux. Quando o Windows tiver um equivalente diferente, ele aparece no comentário.
+
+### Descubra os seus endereços
+
+Primeiro, o IP privado do notebook na rede local:
 
 ```bash
 # macOS (en0 costuma ser o Wi-Fi)
@@ -262,253 +276,242 @@ ipconfig getifaddr en0
 
 # Linux
 ip -4 addr show
+
+# Windows: rode "ipconfig" e procure "Endereço IPv4"
 ```
 
-Saída típica no macOS:
+Algo como `192.168.0.12` deve aparecer. No Linux, você verá também a interface `lo`, com `127.0.0.1`: é a loopback.
 
-```text
-192.168.0.15
-```
-
-O IP público, visto de fora:
+Agora, o IP público com que o mundo enxerga você:
 
 ```bash
 curl https://checkip.amazonaws.com
 ```
 
 ```text
-203.0.113.42
+203.0.113.45
 ```
 
-Esse endpoint, mantido pela própria AWS, devolve apenas o IP de onde a requisição veio. Se os dois números forem diferentes (e quase sempre são), você acabou de ver o NAT em ação.
+São dois endereços diferentes. O primeiro só existe dentro da sua casa. O segundo pertence ao roteador, ou ao provedor, se houver CGNAT. Se você abrir o painel do roteador e o IP de WAN mostrado lá começar com `100.`, entre 100.64 e 100.127, você está atrás de CGNAT.
 
-### Quem está ouvindo em cada porta
+### Veja quem está escutando
 
-Com o backend e o frontend do Rangô rodando, pergunte ao sistema quais processos estão ouvindo:
+Suba o backend do Rangô do jeito padrão e, em outro terminal, pergunte ao sistema quem está escutando na porta 8000:
 
 ```bash
-# macOS e Linux
-lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(8000|5173|5432)'
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+
+# Linux, alternativa: ss -ltnp | grep 8000
+# Windows: netstat -ano | findstr :8000
 ```
 
 ```text
-Python    41822 voce   3u  IPv4 0x...  0t0  TCP 127.0.0.1:8000 (LISTEN)
-node      41907 voce  23u  IPv6 0x...  0t0  TCP [::1]:5173 (LISTEN)
-postgres    812 voce   7u  IPv4 0x...  0t0  TCP 127.0.0.1:5432 (LISTEN)
+COMMAND   PID  USER   FD   TYPE  DEVICE  SIZE/OFF NODE NAME
+Python  41233  voce    3u  IPv4  0x9a1c       0t0  TCP 127.0.0.1:8000 (LISTEN)
 ```
 
-A coluna que interessa é a do endereço. O Uvicorn ouve em `127.0.0.1:8000`, o loopback IPv4. O Vite ouve em `[::1]:5173`, que é o loopback do IPv6 (dependendo da versão do Node e do sistema, pode aparecer `127.0.0.1`). O PostgreSQL, instalado com a configuração padrão, também só ouve no loopback. Todos os três estão acessíveis apenas de dentro do notebook. Essa configuração padrão é proposital: ferramentas de desenvolvimento escolhem o loopback para que você não exponha nada por acidente.
-
-### Abrindo a API para a rede local
-
-Para que outros aparelhos da sua casa acessem a API, o Uvicorn precisa ouvir em todas as interfaces, e não só no loopback. O endereço especial para isso é `0.0.0.0`, que no contexto de um servidor significa "qualquer interface desta máquina":
+A coluna `NAME` mostra o bind: `127.0.0.1:8000`. O Uvicorn só aceita conexões pela loopback. Teste com o `nc` (netcat), que tenta abrir uma conexão TCP e informa o resultado:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+nc -zv 127.0.0.1 8000
+nc -zv 127.0.0.1 8001
 ```
 
-Confira de novo com `lsof`, e o endereço terá mudado para `*:8000`. Agora pegue o celular, conectado ao mesmo Wi-Fi, e abra `http://192.168.0.15:8000/health` (com o IP do seu notebook). A resposta `{"status":"ok"}` aparece na tela. No macOS, pode surgir uma janela do firewall perguntando se o Python pode aceitar conexões de entrada. Ela é o firewall do próprio sistema fazendo o trabalho dele.
+```text
+Connection to 127.0.0.1 port 8000 [tcp/*] succeeded!
+nc: connectx to 127.0.0.1 port 8001 (tcp) failed: Connection refused
+```
 
-Faça o mesmo com o frontend. O Vite aceita a opção `--host` para ouvir em todas as interfaces:
+O texto exato muda um pouco entre sistemas, mas o resultado é o mesmo: a 8000 completou o handshake, e a 8001 respondeu com RST, porque ninguém mora lá.
+
+Agora faça o teste mais revelador. Tente se conectar à porta 8000 usando o IP do Wi-Fi, e não o da loopback:
 
 ```bash
-npm run dev -- --host
+curl http://192.168.0.12:8000/health
 ```
 
-Ele vai listar um endereço `Network`, como `http://192.168.0.15:5173/`. Abra no celular. A página carrega, mas a lista de restaurantes fica vazia.
-
-Por quê? Releia o `App.tsx`: a URL da API é `http://localhost:8000`. O código React roda **no navegador do celular**, e para o celular, `localhost` é o próprio celular. O `fetch` vai bater na porta 8000 do telefone, onde não há nada. É o mesmo erro da sua sócia em Recife, só que agora escondido dentro do código.
-
-Para corrigir, a URL da API precisa vir de configuração, e não ficar fixa no código. O Vite lê variáveis de ambiente que começam com `VITE_`:
-
-```tsx
-// frontend/src/App.tsx
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+```text
+curl: (7) Failed to connect to 192.168.0.12 port 8000 after 2 ms: Couldn't connect to server
 ```
+
+Conexão recusada, na própria máquina. O Uvicorn está rodando, mas fez bind só em `127.0.0.1`, então ignora o que chega pela interface do Wi-Fi. Para comparar, veja como é um timeout de verdade, usando um IP de documentação que não leva a lugar nenhum:
 
 ```bash
-# frontend/.env.local
-VITE_API_URL=http://192.168.0.15:8000
+curl --connect-timeout 5 http://203.0.113.10:8000/health
 ```
 
-E o backend precisa aceitar a nova origem no CORS, também por variável de ambiente:
+```text
+curl: (28) Failed to connect to 203.0.113.10 port 8000 after 5002 ms: Timeout was reached
+```
+
+Dois milissegundos contra cinco segundos. Agora você reconhece a assinatura de cada erro.
+
+### Olhe a tabela de rotas
+
+```bash
+# Linux
+ip route
+
+# macOS: netstat -rn -f inet
+# Windows: route print
+```
+
+```text
+default via 192.168.0.1 dev wlan0 proto dhcp metric 600
+192.168.0.0/24 dev wlan0 proto kernel scope link src 192.168.0.12 metric 600
+```
+
+São as duas regras que você já conhece. A segunda diz que a subnet `192.168.0.0/24` é entregue direto pela interface `wlan0`. A primeira é a rota padrão: todo o resto vai para `192.168.0.1`, o roteador de casa. No macOS, a rota padrão aparece como `default` na coluna `Destination`.
+
+### Siga os saltos
+
+O `traceroute` mostra cada roteador no caminho até um destino. Ele envia pacotes com um limite de saltos crescente e anota quem devolve o aviso de "limite esgotado" em cada etapa:
+
+```bash
+traceroute checkip.amazonaws.com
+# Windows: tracert checkip.amazonaws.com
+```
+
+```text
+ 1  192.168.0.1      2.1 ms
+ 2  100.64.0.1       8.4 ms
+ 3  198.51.100.17   11.9 ms
+ 4  198.51.100.94   14.2 ms
+ 5  * * *
+ 6  203.0.113.201  142.7 ms
+```
+
+A saída acima foi simplificada, e os endereços dos saltos externos foram trocados por IPs de documentação. Mesmo assim, ela mostra uma história típica. O primeiro salto é o seu roteador. O segundo, com `100.64.0.1`, denuncia o CGNAT do provedor. Os asteriscos indicam um roteador que não responde a esse tipo de sonda, o que é comum e não significa que o caminho esteja quebrado. E o salto de 142 ms mostra o pacote atravessando um oceano: `checkip.amazonaws.com` costuma responder de servidores nos Estados Unidos. Guarde esse número, porque a distância até a região escolhida na AWS vai importar bastante na Parte II.
+
+### Calcule blocos CIDR com Python
+
+O módulo `ipaddress`, da biblioteca padrão, é ótimo para conferir contas de CIDR sem papel e caneta:
 
 ```python
-# backend/app/main.py
-import os
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="Rangô")
-
-ORIGENS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ORIGENS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+>>> import ipaddress
+>>> casa = ipaddress.ip_network("192.168.0.0/24")
+>>> casa.num_addresses
+256
+>>> ipaddress.ip_address("192.168.0.23") in casa
+True
+>>> ipaddress.ip_address("192.168.1.23") in casa
+False
+>>> ipaddress.ip_address("192.168.0.12").is_private
+True
+>>> ipaddress.ip_network("10.0.0.0/16").num_addresses
+65536
+>>> list(casa.subnets(new_prefix=26))
+[IPv4Network('192.168.0.0/26'), IPv4Network('192.168.0.64/26'),
+ IPv4Network('192.168.0.128/26'), IPv4Network('192.168.0.192/26')]
 ```
 
+A última linha divide o `/24` da sua casa em quatro subnets de 64 endereços. É exatamente esse tipo de divisão que você vai fazer quando desenhar a rede do Rangô na AWS.
+
+### Coloque o Rangô no celular
+
+Com tudo isso, dá para fazer o Rangô funcionar pelo menos no seu celular, conectado ao mesmo Wi-Fi. Os dois estão na mesma subnet, então não há NAT nem roteador no meio. Só falta o bind.
+
+Suba o backend escutando em todas as interfaces e liberando a origem do front acessado pelo IP:
+
 ```bash
-CORS_ORIGINS="http://localhost:5173,http://192.168.0.15:5173" \
+cd backend
+CORS_ORIGINS="http://localhost:5173,http://192.168.0.12:5173" \
   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Reinicie o Vite para ele ler o `.env.local`, recarregue a página no celular, e a Cantina da Nona aparece. A mudança é pequena, mas acompanha o Rangô até o fim do livro: em cada lugar onde o código rodar, a URL da API e as origens permitidas serão diferentes.
-
-### Testando uma porta sem navegador
-
-O `nc` (netcat) tenta abrir uma conexão TCP e diz se conseguiu. É o jeito mais rápido de separar "o problema é a rede" de "o problema é a aplicação":
+No front, o Vite tem a opção `--host` para o mesmo fim:
 
 ```bash
-nc -zv 192.168.0.15 8000
+cd frontend
+npm run dev -- --host
 ```
 
 ```text
-Connection to 192.168.0.15 port 8000 [tcp/irdmi] succeeded!
+  VITE v6.x  ready in 312 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.0.12:5173/
 ```
 
-Agora derrube o Uvicorn e repita. A resposta muda para `Connection refused`. A máquina respondeu, só que ninguém atende na porta. Você vai usar esse teste muitas vezes na Parte II, quando um servidor na AWS não responder e for preciso descobrir se a culpa é da aplicação ou de uma regra de firewall.
+Na primeira vez, o macOS ou o Windows podem perguntar se você quer permitir conexões de entrada para o Python ou o Node. Permita só para redes privadas.
 
-### Olhando a tabela de rotas e os saltos
+Abra `http://192.168.0.12:5173` no celular. A página carrega, o título "Rangô" aparece... e a lista de restaurantes fica vazia.
 
-A tabela de rotas do notebook:
+Pare um instante e tente descobrir o motivo antes de ler a próxima linha.
+
+O código React roda no navegador do celular. Quando ele executa `fetch("http://localhost:8000/restaurantes")`, o `localhost` é o próprio celular, onde não existe API nenhuma. É o mesmo erro do link que você mandou para a sua sócia, só que escondido dentro do código. O front precisa saber o endereço real da API. Crie o arquivo `frontend/.env.local`:
 
 ```bash
-# macOS
-netstat -rn -f inet | head -n 5
-
-# Linux
-ip route
+# frontend/.env.local
+VITE_API_URL=http://192.168.0.12:8000
 ```
 
-No Linux, a saída costuma ser curta assim:
+Reinicie o `npm run dev -- --host`, porque o Vite só lê as variáveis de ambiente na inicialização, e recarregue a página no celular. Os dois restaurantes aparecem.
 
-```text
-default via 192.168.0.1 dev wlp2s0 proto dhcp metric 600
-192.168.0.0/24 dev wlp2s0 proto kernel scope link src 192.168.0.15
-```
+Esse bug vai voltar, em outras formas, durante todo o livro. Qualquer endereço fixo no código é uma aposta sobre onde a aplicação vai rodar, e essa aposta quase sempre perde quando o código muda de máquina. Por isso o endereço da API e as origens do CORS vieram de variáveis de ambiente desde o começo.
 
-Leia linha a linha. A segunda diz que a subnet `192.168.0.0/24` é entregue diretamente pela interface Wi-Fi. A primeira é a rota padrão: todo o resto vai para `192.168.0.1`, o roteador da casa. Duas linhas, e o seu notebook já sabe chegar a qualquer lugar da internet.
-
-Para ver os saltos até um destino, use o `traceroute` (no Linux, pode ser preciso instalar o pacote `traceroute`):
-
-```bash
-traceroute -n checkip.amazonaws.com
-```
-
-```text
- 1  192.168.0.1      2.1 ms   1.8 ms   1.9 ms
- 2  100.64.12.1      9.4 ms   8.7 ms   9.1 ms
- 3  * * *
- 4  198.51.100.17   14.2 ms  13.9 ms  14.5 ms
- ...
-14  203.0.113.200  131.6 ms 129.8 ms 130.4 ms
-```
-
-O primeiro salto é o seu roteador. Os seguintes são da sua operadora e das redes por onde o pacote passa. Os asteriscos indicam roteadores que não respondem a esse tipo de sonda, o que é comum e não significa problema. Repare no tempo crescendo até passar de 100 ms: é a viagem até os Estados Unidos, onde esse serviço provavelmente está respondendo. E repare no segundo salto, com um endereço começando em `100.64`. Ele vai ser importante daqui a pouco.
-
-### Fazendo contas de CIDR com Python
-
-Você não precisa fazer contas de bits de cabeça. A biblioteca padrão do Python tem o módulo `ipaddress`:
-
-```python
-import ipaddress
-
-rede = ipaddress.ip_network("192.168.0.0/24")
-print(rede.num_addresses)          # 256
-print(rede[0], rede[-1])           # 192.168.0.0 192.168.0.255
-
-print(ipaddress.ip_address("192.168.0.15") in rede)  # True
-print(ipaddress.ip_address("192.168.1.15") in rede)  # False
-
-print(ipaddress.ip_address("192.168.0.15").is_private)  # True
-print(ipaddress.ip_address("8.8.8.8").is_private)       # False
-
-# dividir uma rede /16 em subnets /24, como faremos na AWS
-vpc = ipaddress.ip_network("10.0.0.0/16")
-subnets = list(vpc.subnets(new_prefix=24))
-print(len(subnets))                # 256
-print(subnets[0], subnets[1])      # 10.0.0.0/24 10.0.1.0/24
-```
-
-Guarde esse trecho. Quando você estiver planejando as subnets do Rangô na AWS e se perguntar se dois blocos se sobrepõem, o método `overlaps` deste mesmo módulo responde em uma linha.
-
-### E a sócia em Recife?
-
-Com tudo isso, você consegue mostrar o Rangô para quem está na sua casa. Para quem está em Recife, ainda falta passar pelo NAT do seu roteador. Você teria de configurar port forwarding, torcer para a operadora não estar no seu caminho (veja a próxima seção) e manter o notebook ligado, acordado e na mesma rede o tempo todo. Existem serviços de túnel que criam uma URL pública apontando para uma porta do seu notebook, e eles servem para uma demonstração rápida. Para um app de verdade, a resposta é outra: colocar o Rangô numa máquina que tenha um IP público, fique ligada o tempo todo e não durma quando você fecha a tampa. Essa máquina vai existir no capítulo 9, já na AWS.
+E a sua sócia em Recife? Continua sem acesso. O seu notebook tem um IP privado, atrás de um NAT, talvez atrás de dois. Para ela alcançar o Rangô, ele precisa estar numa máquina com IP público, ligada o tempo todo, e não num notebook que você fecha para ir almoçar.
 
 ## Armadilhas e casos reais
 
-### `0.0.0.0` em qualquer rede
+### O `0.0.0.0` no lugar errado
 
-Subir o Uvicorn com `--host 0.0.0.0` é a coisa certa dentro de um container ou de um servidor (vamos fazer isso muitas vezes). No notebook, num café ou num aeroporto, significa que qualquer pessoa conectada ao mesmo Wi-Fi pode acessar a sua API de desenvolvimento, incluindo a documentação automática em `/docs`, que lista todos os endpoints. Se o seu backend local tem algum endpoint de administração sem autenticação "porque é só local", ele deixou de ser só local.
+Na sua rede de casa, fazer bind em `0.0.0.0` expõe o serviço para quem estiver no mesmo Wi-Fi, e o NAT do roteador barra o resto. Num servidor com IP público, não existe essa proteção. Escutar em `0.0.0.0` significa aceitar conexões da internet inteira, a menos que um firewall diga o contrário.
 
-> **Dica:** use `0.0.0.0` apenas quando precisar, e volte para o padrão (`127.0.0.1`) quando terminar o teste. Se o objetivo é acessar só pelo celular, o firewall do sistema operacional pode restringir quem se conecta.
+> **Na vida real:** no começo de janeiro de 2017, grupos de atacantes passaram a varrer a internet atrás de servidores MongoDB acessíveis publicamente e sem senha de administrador. Ferramentas de busca como o Shodan listavam dezenas de milhares deles. Os atacantes copiavam os dados, apagavam tudo e deixavam uma nota pedindo resgate em bitcoin. Em poucos dias, mais de 27 mil bancos tinham sido sequestrados. Em muitos casos, a causa era a mesma: o banco escutando em todas as interfaces de um servidor com IP público, sem autenticação e sem firewall na frente.
 
-### O banco de dados que ouvia a internet inteira
+O PostgreSQL do Rangô, instalado localmente, escuta só em `localhost` por padrão, e é bom que continue assim. A pergunta "quem consegue chegar nesta porta?" deve ser feita para cada serviço, e a resposta para o banco de dados deveria ser "só a aplicação".
 
-O mesmo raciocínio vale para servidores, com consequências bem maiores. Um banco de dados configurado para ouvir em todas as interfaces, numa máquina com IP público e sem firewall, está aceitando conexões do planeta. Robôs varrem a internet o tempo todo procurando exatamente isso, testando portas conhecidas como 5432 (PostgreSQL), 3306 (MySQL), 6379 (Redis) e 27017 (MongoDB).
+### O Docker que fura o firewall
 
-> **Na vida real:** em janeiro de 2017, milhares de instalações de MongoDB expostas na internet sem autenticação foram apagadas por atacantes, que deixavam no lugar uma nota pedindo resgate em bitcoin. Em poucos dias, o número de bancos afetados passou de 27 mil, segundo pesquisadores que acompanhavam os ataques. Ninguém invadiu nada de forma sofisticada: os bancos estavam ouvindo em um IP público, sem senha, e os atacantes simplesmente se conectaram.
+> **Armadilha:** em Linux, publicar uma porta com `docker run -p 5432:5432 postgres` faz bind em `0.0.0.0` por padrão, e o Docker cria as próprias regras de firewall no `iptables`. Na prática, isso pode passar por cima de regras do `ufw` que você achava que estavam bloqueando a porta. Se o container só precisa ser acessado pela própria máquina, publique com `-p 127.0.0.1:5432:5432`.
 
-Essa história vai reaparecer no capítulo 10, que abre justamente com o banco do Rangô acessível pela internet inteira. A solução terá a ver com as subnets privadas que você acabou de conhecer.
+Você vai conhecer containers a fundo no capítulo 3, mas essa armadilha vale ser conhecida desde já, porque muita gente sobe um Postgres em container no primeiro servidor alugado.
 
-### Connection refused e timeout são problemas diferentes
+### Port forwarding como atalho
 
-Quando uma conexão falha, a mensagem de erro diz muito sobre onde está o problema:
+Liberar uma porta no roteador de casa para mostrar o app para alguém parece inofensivo. O problema é que, em poucos minutos, robôs que varrem a internet sem parar vão encontrar essa porta aberta e começar a testar o que há do outro lado. Um servidor de desenvolvimento com `--reload`, rotas de debug e sem autenticação é exatamente o que eles procuram. E, se você estiver atrás de CGNAT, o atalho nem funciona, o que pode ser uma sorte.
 
-- **Connection refused**: o pacote chegou à máquina, e ela respondeu que ninguém ouve naquela porta. O processo caiu, está em outra porta ou está ouvindo só no loopback.
-- **Timeout**: o pacote não teve resposta nenhuma. Algo no caminho descartou o pacote em silêncio. Pode ser um firewall, um NAT sem regra de encaminhamento ou uma rota errada.
+### Faixas privadas que colidem
 
-Na AWS, o timeout é o sintoma clássico de uma regra de firewall faltando. Quem não conhece essa diferença costuma passar uma hora mexendo no código da aplicação quando o problema está na rede.
+> **Armadilha:** duas redes privadas podem usar a mesma faixa sem problema algum, até o dia em que precisam se conectar. Se a VPN da empresa usa `192.168.0.0/24` e a sua casa também, o notebook não sabe para qual lado mandar os pacotes para `192.168.0.10`. A tabela de rotas tem duas respostas para a mesma pergunta, e algum serviço some. Na nuvem, escolher faixas que não se sobreponham às redes da empresa e de outros ambientes economiza muita dor de cabeça futura. Esse assunto volta no capítulo 10.
 
-### O IP público compartilhado com os vizinhos
+### IPv6 e a falsa sensação de segurança
 
-Lembra do segundo salto do `traceroute`, com endereço começando em `100.64`? Essa faixa, `100.64.0.0/10`, é reservada para um tipo de NAT feito pela operadora, o **CGNAT** (*Carrier-Grade NAT*). Como as operadoras também não têm IPv4 público para todos os clientes, muitas colocam centenas de casas atrás de um mesmo IP público, com mais uma camada de NAT na rede delas. No Brasil, isso é bastante comum em internet residencial e quase universal na rede móvel.
-
-Com CGNAT, o IP que aparece no `checkip.amazonaws.com` pertence à operadora e é compartilhado com seus vizinhos. Configurar port forwarding no seu roteador não adianta nada, porque o NAT que bloqueia a entrada está na operadora, fora do seu alcance.
-
-> **Armadilha:** liberar acesso a um servidor apenas para o IP público da sua casa parece seguro, mas com CGNAT esse IP é de muitas outras pessoas e pode mudar sem aviso. Na Parte II, vamos ver formas de acessar servidores sem depender do seu IP.
-
-### `localhost` no código do frontend
-
-Toda URL fixa no código React é avaliada no navegador de quem usa o app, então `localhost` no frontend significa o computador do usuário. Esse erro costuma passar despercebido no desenvolvimento e aparecer no primeiro deploy, quando o site em produção tenta chamar `http://localhost:8000` e o console do navegador se enche de erros de conexão. Configuração por variável de ambiente, desde o primeiro dia, evita a surpresa.
+Com IPv6 há endereços de sobra, então cada dispositivo pode receber um endereço público e o NAT deixa de ser necessário. Isso também quer dizer que a barreira involuntária do NAT desaparece. Os roteadores domésticos modernos costumam bloquear conexões de entrada em IPv6 por padrão, mas o ponto importante é outro: quem protege um serviço é um firewall configurado de propósito, e não um efeito colateral da falta de endereços.
 
 ## Resumo
 
-- `localhost` e `127.0.0.1` apontam para a própria máquina. Um link com `localhost` só funciona para quem o abre no mesmo computador.
-- O IP identifica uma interface de rede; a porta identifica o processo que atende. IPv4 tem 32 bits e os endereços acabaram, o que levou ao IPv6 e ao NAT.
-- Um servidor ouvindo em `127.0.0.1` só aceita conexões locais. Em `0.0.0.0`, aceita por qualquer interface, com os riscos que isso traz.
-- TCP abre uma conexão com handshake e garante entrega e ordem. UDP manda e não confirma, e serve a DNS, vídeo e HTTP/3.
-- Roteadores encaminham pacotes salto a salto, escolhendo a rota mais específica. A rota padrão é `0.0.0.0/0`.
-- IPs privados (RFC 1918) valem só dentro de uma rede. O NAT os traduz para um IP público na saída e bloqueia conexões não solicitadas na entrada. CGNAT repete o truque na operadora.
-- CIDR descreve blocos de endereços: `/24` tem 256 endereços, `/16` tem 65.536, `/32` é um único IP. Subnets organizam e isolam redes.
-- Connection refused indica que a máquina respondeu e a porta está fechada; timeout indica que algo no caminho descartou o pacote.
-- O Rangô agora lê a URL da API (`VITE_API_URL`) e as origens de CORS (`CORS_ORIGINS`) de variáveis de ambiente.
+- `localhost` (`127.0.0.1`) aponta para a loopback, uma interface que nunca sai da máquina. Cada máquina tem o seu.
+- Um endereço IP identifica uma interface de rede. O IPv4 tem 32 bits e está esgotado. O IPv6 tem 128 bits.
+- A porta escolhe o processo dentro da máquina. IP, porta e caminho da URL resolvem máquina, processo e função.
+- Fazer bind em `127.0.0.1` aceita só conexões locais. Em `0.0.0.0`, aceita por todas as interfaces.
+- O TCP abre conexões com o handshake SYN, SYN-ACK, ACK e garante entrega em ordem. O UDP manda e esquece.
+- Conexão recusada significa que a máquina respondeu, mas nada escuta na porta. Timeout significa que o pacote não chegou ou foi descartado.
+- O roteamento acontece salto a salto. Vence a rota mais específica, e `0.0.0.0/0` é a rota padrão.
+- IPs privados (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) não circulam na internet. O NAT traduz para um IP público e barra conexões de entrada não solicitadas. O CGNAT adiciona mais uma camada no provedor.
+- No CIDR, o número depois da barra diz quantos bits são fixos. Um `/24` tem 256 endereços, e um `/16` tem 65.536.
+- Uma subnet agrupa máquinas que se falam direto. Subnets públicas e privadas separam o que a internet pode alcançar.
+- O Rangô agora roda no celular, na mesma rede, com o endereço da API vindo de `VITE_API_URL` e as origens do CORS vindo de `CORS_ORIGINS`.
 
-## Próxima parada: um nome em vez de um número
+## Próxima parada: um nome e um cadeado
 
-O Rangô agora abre no celular, desde que o celular esteja na sua casa e você mande um endereço como `http://192.168.0.15:5173`. Mesmo quando ele estiver num servidor com IP público, o link que você mandar para os clientes vai ser algo como `http://203.0.113.42:8000`. Ninguém decora isso, ninguém confia nisso, e o navegador ainda vai exibir, bem ao lado do endereço, um aviso de "Não seguro".
+Digamos que, num passe de mágica, o Rangô já estivesse rodando numa máquina com IP público, `203.0.113.45`. A sua sócia conseguiria acessar. Mas ela teria de digitar `http://203.0.113.45:5173` no navegador, e nenhum cliente faz pedido de comida digitando quatro números separados por pontos.
 
-O que você quer, claro, é que o cliente digite `rango.com.br` e o cardápio apareça, com o cadeado ao lado do endereço. Como um nome vira um IP? Quem garante que o `rango.com.br` que o cliente acessou é mesmo o seu, e não o de alguém no meio do caminho lendo os pedidos e os dados de pagamento? Essas duas perguntas, uma sobre DNS e outra sobre TLS, são o assunto do próximo capítulo.
+O que ela quer, e o que os clientes esperam, é digitar `rango.com.br` e ver um cadeado ao lado do endereço. Isso levanta duas perguntas novas. Como um nome vira um IP, se nenhum computador do caminho sabe o que é "rangô"? E, quando o navegador mostra o cadeado, quem garante que aquele site é mesmo o seu, e não o de alguém que interceptou a conexão no Wi-Fi da praça de alimentação? No próximo capítulo, vamos abrir o DNS e o TLS por dentro para responder a essas duas perguntas.
 
 ## Referências
 
-- RFC 791, Internet Protocol: <https://www.rfc-editor.org/rfc/rfc791>
-- RFC 9293, Transmission Control Protocol (TCP): <https://www.rfc-editor.org/rfc/rfc9293>
-- RFC 768, User Datagram Protocol: <https://www.rfc-editor.org/rfc/rfc768>
-- RFC 9000, QUIC: <https://www.rfc-editor.org/rfc/rfc9000>
-- RFC 1918, Address Allocation for Private Internets: <https://www.rfc-editor.org/rfc/rfc1918>
-- RFC 4632, Classless Inter-domain Routing (CIDR): <https://www.rfc-editor.org/rfc/rfc4632>
-- RFC 6598, faixa compartilhada `100.64.0.0/10` para CGNAT: <https://www.rfc-editor.org/rfc/rfc6598>
-- RFC 5737, faixas de IPv4 reservadas para documentação: <https://www.rfc-editor.org/rfc/rfc5737>
-- Documentação do módulo `ipaddress` do Python: <https://docs.python.org/3/library/ipaddress.html>
-- Configurações do Uvicorn (`--host`, `--port`): <https://www.uvicorn.org/settings/>
-- Opções do servidor do Vite (`server.host`): <https://vite.dev/config/server-options>
-- Variáveis de ambiente no Vite: <https://vite.dev/guide/env-and-mode>
-- Endereços reservados em subnets da AWS: <https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html>
-- CSO Online, sobre os ataques de resgate a MongoDB expostos em 2017: <https://www.csoonline.com/article/3154190/exposed-mongodb-installs-being-erased-held-for-ransom.html>
+- RFC 791, *Internet Protocol* (IPv4): https://www.rfc-editor.org/rfc/rfc791
+- RFC 9293, *Transmission Control Protocol* (TCP): https://www.rfc-editor.org/rfc/rfc9293
+- RFC 768, *User Datagram Protocol* (UDP): https://www.rfc-editor.org/rfc/rfc768
+- RFC 1918, *Address Allocation for Private Internets*: https://www.rfc-editor.org/rfc/rfc1918
+- RFC 4632, *Classless Inter-domain Routing* (CIDR): https://www.rfc-editor.org/rfc/rfc4632
+- RFC 6598, faixa `100.64.0.0/10` para CGNAT: https://www.rfc-editor.org/rfc/rfc6598
+- RFC 5737, endereços IPv4 reservados para documentação: https://www.rfc-editor.org/rfc/rfc5737
+- Documentação do FastAPI: https://fastapi.tiangolo.com/
+- Configurações do Uvicorn (`--host`, `--port`): https://www.uvicorn.org/settings/
+- Variáveis de ambiente no Vite: https://vite.dev/guide/env-and-mode
+- Módulo `ipaddress` do Python: https://docs.python.org/3/library/ipaddress.html
+- Ataques de resgate a bancos MongoDB, janeiro de 2017 (The Register): https://www.theregister.com/2017/01/09/mongodb/
+- Mesma onda de ataques (SiliconANGLE): https://siliconangle.com/2017/01/10/27000-mongodb-installs-hijacked-held-ransom/
