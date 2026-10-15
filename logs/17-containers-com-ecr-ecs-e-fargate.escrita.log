@@ -1,0 +1,2 @@
+4.981 palavras, checagem de estilo limpa, resumo salvo.
+Pendências: validar a sintaxe CDK de `ApplicationLoadBalancedFargateService`/`Secret.from_secrets_manager(field=)` com `cdk synth` (estava em "Não confirmado"); a mensagem `ResourceInitializationError` e a saída do `x-rango-instancia` vieram da memória, sem conferência.

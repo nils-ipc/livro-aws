@@ -1,0 +1,2 @@
+4.967 palavras (sem blocos de código); capítulo e resumo salvos.
+Pendências: o código do blue/green no CDK em Python (regras com pesos e regra de teste por cabeçalho no mesmo listener) e o OIDC não foram testados na conta; confirmar o formato do `sub` do repositório e as regras de environment do plano GitHub; a parte de IAM/OIDC precisa de revisão de segurança.

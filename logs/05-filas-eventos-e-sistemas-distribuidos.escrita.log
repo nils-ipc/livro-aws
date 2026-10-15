@@ -1,0 +1,2 @@
+4.965 palavras, sem contar código.
+Pendências: falta rodar o mão na massa para valer (timings e saídas do `XPENDING` foram estimados) e conferir se o `docker compose kill` evita o restart automático com `unless-stopped`.

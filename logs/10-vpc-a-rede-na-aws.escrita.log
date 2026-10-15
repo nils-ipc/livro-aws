@@ -1,0 +1,2 @@
+Capítulo 10 com 4.933 palavras; resumo salvo; os comandos AWS ainda não foram testados.
+Pendências: confirmar o pacote `postgresql17-server` no AL2023 (fonte só de terceiros) e se `ec2messages` ainda é exigido pelo SSM.

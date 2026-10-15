@@ -1,0 +1,187 @@
+>> [01/24] Parte I: sem pesquisa.
+>> [01/24] Escrevendo capitulos/01-do-notebook-para-o-mundo.md (21:48:33). Log: logs/01-do-notebook-para-o-mundo.escrita.log
+Capítulo 01 com 4.905 palavras (sem blocos de código); resumo salvo com ~370 tokens no `wc`, pouco acima das ~300 palavras pedidas, pois o `wc` conta hífens e símbolos.
+Pendências: conferir os links das RFCs, a saída do `lsof`/`nc` e o caso MongoDB 2017 ([The Register](https://www.theregister.com/2017/01/09/mongodb/), [SiliconANGLE](https://siliconangle.com/2017/01/10/27000-mongodb-installs-hijacked-held-ransom/)); FastAPI apresentado brevemente porque saiu da lista do que o leitor já sabe.
+>> [01/24] Concluído: 4968 palavras sem código.
+
+>> [02/24] Parte I: sem pesquisa.
+>> [02/24] Escrevendo capitulos/02-dns-https-e-tls.md (21:52:30). Log: logs/02-dns-https-e-tls.escrita.log
+4.967 palavras sem código; checagem limpa; resumo salvo.
+Pendências: confirmar `allowedHosts` do Vite e prazos CA/B Forum (escritos de memória, sem busca); saídas do `dig` com `rango.com.br` são ilustrativas.
+>> [02/24] Concluído: 5032 palavras sem código.
+!! Atenção: capítulo 02 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [03/24] Parte I: sem pesquisa.
+>> [03/24] Escrevendo capitulos/03-servidores-containers-e-kubernetes.md (21:58:52). Log: logs/03-servidores-containers-e-kubernetes.escrita.log
+Capítulo 03 escrito com 4.954 palavras; resumo salvo em `notas/resumos/03-servidores-containers-e-kubernetes.md`; checagem mecânica limpa.
+Pendências: rodar os exemplos de Docker, Compose e kind e validar os links do Codecov e da Fortune (Tesla), confirmados só por busca.
+>> [03/24] Concluído: 5023 palavras sem código.
+!! Atenção: capítulo 03 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [04/24] Parte I: sem pesquisa.
+>> [04/24] Escrevendo capitulos/04-arquitetura-que-escala.md (22:05:20). Log: logs/04-arquitetura-que-escala.escrita.log
+Cap. 04 tem 4.966 palavras (sem blocos de código); resumo salvo com ~400 palavras, acima do limite de ~300.
+Pendências: não rodei os comandos nem o código Docker/Nginx/Redis, e as saídas mostradas foram estimadas; confirmar o link InfoQ do Prime Video; revisar o texto antes de publicar.
+>> [04/24] Concluído: 5024 palavras sem código.
+!! Atenção: capítulo 04 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [05/24] Parte I: sem pesquisa.
+>> [05/24] Escrevendo capitulos/05-filas-eventos-e-sistemas-distribuidos.md (22:13:31). Log: logs/05-filas-eventos-e-sistemas-distribuidos.escrita.log
+4.965 palavras, sem contar código.
+Pendências: falta rodar o mão na massa para valer (timings e saídas do `XPENDING` foram estimados) e conferir se o `docker compose kill` evita o restart automático com `unless-stopped`.
+>> [05/24] Concluído: 5018 palavras sem código.
+!! Atenção: capítulo 05 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [06/24] Parte I: sem pesquisa.
+>> [06/24] Escrevendo capitulos/06-producao-de-verdade.md (22:20:28). Log: logs/06-producao-de-verdade.escrita.log
+4.983 palavras; checagem mecânica limpa (0 travessões, nenhum "não é X, é Y").
+Pendências: conferir os links da GitLab e da SEC e as versões `actions/checkout@v5`/`setup-python@v6`; nenhum comando ou link do capítulo foi executado ou aberto.
+>> [06/24] Concluído: 5051 palavras sem código.
+!! Atenção: capítulo 06 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [07/24] Pesquisando (22:27:55). Log: logs/07-bem-vindo-a-aws.pesquisa.log
+ok, 26 itens salvos.
+>> [07/24] Escrevendo capitulos/07-bem-vindo-a-aws.md (22:28:42). Log: logs/07-bem-vindo-a-aws.escrita.log
+4.990 palavras (perto do teto de 5.000; a contagem inclui tabelas e referências).
+Pendências para o autor: conferir as telas atuais do console (MFA, Budgets) e a saída de `describe-availability-zones` em `sa-east-1`; caso real novo citado é o incidente do DynamoDB de 19–20/out/2025 ([fonte](https://aws.amazon.com/message/101925)).
+>> [07/24] Concluído: 5058 palavras sem código.
+!! Atenção: capítulo 07 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [08/24] Pesquisando (22:34:36). Log: logs/08-iam-quem-pode-fazer-o-que.pesquisa.log
+ok, 29 itens salvos.
+>> [08/24] Escrevendo capitulos/08-iam-quem-pode-fazer-o-que.md (22:35:25). Log: logs/08-iam-quem-pode-fazer-o-que.escrita.log
+Escrevi o capítulo 08 e o resumo dele; o texto tem 4.928 palavras sem os blocos de código, perto do teto de 5.000. Pendência para o autor: os passos de console do Identity Center e a saída do `aws configure sso` vêm da minha memória, com dados das notas, e não testei nada numa conta real. Vale conferir.
+>> [08/24] Concluído: 5010 palavras sem código.
+!! Atenção: capítulo 08 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [09/24] Pesquisando (22:39:38). Log: logs/09-ec2-seu-primeiro-servidor.pesquisa.log
+ok, 30 itens salvos.
+>> [09/24] Escrevendo capitulos/09-ec2-seu-primeiro-servidor.md (22:40:28). Log: logs/09-ec2-seu-primeiro-servidor.escrita.log
+4.966 palavras.
+Pendências: conferir numa instância real `dnf install nginx`, `python3.12 -m venv`, o `default_server` do Nginx, as versões de exemplo (Python 3.12.12, nginx 1.28.0) e o texto do erro de `PassRole`; validar os links do Capital One e do blog do IMDSv2; o preço/hora da t3.micro ficou de fora porque não foi confirmado.
+>> [09/24] Concluído: 5042 palavras sem código.
+!! Atenção: capítulo 09 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [10/24] Pesquisando (22:46:22). Log: logs/10-vpc-a-rede-na-aws.pesquisa.log
+ok, 33 itens salvos.
+>> [10/24] Escrevendo capitulos/10-vpc-a-rede-na-aws.md (22:47:15). Log: logs/10-vpc-a-rede-na-aws.escrita.log
+Capítulo 10 com 4.933 palavras; resumo salvo; os comandos AWS ainda não foram testados.
+Pendências: confirmar o pacote `postgresql17-server` no AL2023 (fonte só de terceiros) e se `ec2messages` ainda é exigido pelo SSM.
+>> [10/24] Concluído: 4996 palavras sem código.
+
+>> [11/24] Pesquisando (22:52:30). Log: logs/11-s3-armazenamento-de-objetos.pesquisa.log
+ok, 27 itens salvos.
+>> [11/24] Escrevendo capitulos/11-s3-armazenamento-de-objetos.md (22:53:26). Log: logs/11-s3-armazenamento-de-objetos.escrita.log
+4.993 palavras.
+Pendências: os preços do S3 vêm de levantamento de terceiros (conferir na página oficial); o limite de 5 GB por PUT só foi confirmado em fontes secundárias; o código é rascunho, nada foi executado, e precisa de teste e revisão.
+>> [11/24] Concluído: 5051 palavras sem código.
+!! Atenção: capítulo 11 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [12/24] Pesquisando (23:01:17). Log: logs/12-rds-banco-de-dados-gerenciado.pesquisa.log
+ok, 25
+>> [12/24] Escrevendo capitulos/12-rds-banco-de-dados-gerenciado.md (23:02:16). Log: logs/12-rds-banco-de-dados-gerenciado.escrita.log
+4998 palavras (o limite é 5.000); o capítulo e o resumo foram salvos.
+Pendências: conferir na doc o que escrevi de memória (gatilhos do storage autoscaling, fórmula do `max_connections`, `--manage-master-user-password`). A senha mestre fica no Secrets Manager, mas a IPC Global prefere o Parameter Store: decidir se mantém.
+>> [12/24] Concluído: 5049 palavras sem código.
+!! Atenção: capítulo 12 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [13/24] Pesquisando (23:09:53). Log: logs/13-load-balancer-e-auto-scaling.pesquisa.log
+ok, 27
+>> [13/24] Escrevendo capitulos/13-load-balancer-e-auto-scaling.md (23:10:38). Log: logs/13-load-balancer-e-auto-scaling.escrita.log
+4.985 palavras (sem código). Fontes das buscas já estão nas Referências do capítulo: [AWS ELB 2012](https://aws.amazon.com/message/680587) e [PassRole no ASG](https://docs.aws.amazon.com/autoscaling/ec2/userguide/us-iam-role.html).
+Pendências: o capítulo está no teto de 5.000 palavras; a AMI leva o `api.env` com a senha até o cap. 16 resolver; a data do especial (sábado, 17/out/2026) está fixa no texto; não executei os comandos na AWS, e as saídas mostradas são exemplos que precisam ser conferidos.
+>> [13/24] Concluído: 5051 palavras sem código.
+!! Atenção: capítulo 13 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [14/24] Pesquisando (23:20:03). Log: logs/14-route-53-cloudfront-e-certificados.pesquisa.log
+ok 33
+>> [14/24] Escrevendo capitulos/14-route-53-cloudfront-e-certificados.md (23:20:56). Log: logs/14-route-53-cloudfront-e-certificados.escrita.log
+4.956 palavras; resumo salvo.
+Pendências: conferir ao vivo o `CustomErrorResponses` 403/404 (sem fonte oficial), se o Registro.br testa os NS antes da troca e o CN da CA intermediária.
+>> [14/24] Concluído: 4998 palavras sem código.
+
+>> [15/24] Pesquisando (23:28:44). Log: logs/15-infraestrutura-como-codigo-com-cdk.pesquisa.log
+ok, 24
+>> [15/24] Escrevendo capitulos/15-infraestrutura-como-codigo-com-cdk.md (23:29:31). Log: logs/15-infraestrutura-como-codigo-com-cdk.escrita.log
+4957 palavras (limite: 5.000). Pendências: os nomes das classes `CfnServerlessCache.*Property` e `ListenerCertificate.from_certificate_manager`, a cascata do *Delete VPC* no console e as saídas de `cdk diff`/drift (ilustrativas) não foram verificados. Só `HealthChecks.with_additional_checks` foi confirmado, na [doc CDK](https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_autoscaling/HealthChecks.html). Rascunho a revisar; se for publicado, avalie declarar o uso de IA.
+>> [15/24] Concluído: 5020 palavras sem código.
+!! Atenção: capítulo 15 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [16/24] Pesquisando (23:37:01). Log: logs/16-segredos-e-criptografia.pesquisa.log
+ok, 27 itens salvos.
+>> [16/24] Escrevendo capitulos/16-segredos-e-criptografia.md (23:37:51). Log: logs/16-segredos-e-criptografia.escrita.log
+Capítulo 16 escrito com 4.958 palavras (sem blocos de código); resumo salvo.
+Pendências para o autor: o nome do snapshot no `app.py` é um placeholder, e a 2ª rotação + instance refresh precisam ser testados de verdade.
+>> [16/24] Concluído: 5007 palavras sem código.
+!! Atenção: capítulo 16 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [17/24] Pesquisando (23:47:00). Log: logs/17-containers-com-ecr-ecs-e-fargate.pesquisa.log
+ok, 28
+>> [17/24] Escrevendo capitulos/17-containers-com-ecr-ecs-e-fargate.md (23:47:48). Log: logs/17-containers-com-ecr-ecs-e-fargate.escrita.log
+4.981 palavras, checagem de estilo limpa, resumo salvo.
+Pendências: validar a sintaxe CDK de `ApplicationLoadBalancedFargateService`/`Secret.from_secrets_manager(field=)` com `cdk synth` (estava em "Não confirmado"); a mensagem `ResourceInitializationError` e a saída do `x-rango-instancia` vieram da memória, sem conferência.
+>> [17/24] Concluído: 5043 palavras sem código.
+!! Atenção: capítulo 17 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [18/24] Pesquisando (23:54:09). Log: logs/18-ci-cd-na-aws.pesquisa.log
+ok, 28 itens salvos (22 pontos conferidos, 4 de preços e limites e 7 em "Não confirmado" entram na contagem como 22 + 4 + 2 de apoio).
+
+Correção da contagem: 22 em "Pontos conferidos", 4 em "Preços e limites" e 7 em "Não confirmado", ou seja, 33 no arquivo. 26 deles são fatos confirmados.
+>> [18/24] Escrevendo capitulos/18-ci-cd-na-aws.md (23:55:05). Log: logs/18-ci-cd-na-aws.escrita.log
+4.967 palavras (sem blocos de código); capítulo e resumo salvos.
+Pendências: o código do blue/green no CDK em Python (regras com pesos e regra de teste por cabeçalho no mesmo listener) e o OIDC não foram testados na conta; confirmar o formato do `sub` do repositório e as regras de environment do plano GitHub; a parte de IAM/OIDC precisa de revisão de segurança.
+>> [18/24] Concluído: 5016 palavras sem código.
+!! Atenção: capítulo 18 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [19/24] Pesquisando (00:05:02). Log: logs/19-serverless-com-lambda-e-api-gateway.pesquisa.log
+ok, 26 itens salvos.
+>> [19/24] Escrevendo capitulos/19-serverless-com-lambda-e-api-gateway.md (00:05:51). Log: logs/19-serverless-com-lambda-e-api-gateway.escrita.log
+4.925 palavras sem contar código; resumo salvo.
+Pendências: conferir os preços da Lambda na página oficial (as notas pedem); como todo código gerado, o webhook HMAC precisa de revisão de segurança.
+>> [19/24] Concluído: 4980 palavras sem código.
+
+>> [20/24] Pesquisando (00:16:10). Log: logs/20-dynamodb.pesquisa.log
+ok, 28 itens salvos (23 conferidos e 5 em "Não confirmado").
+>> [20/24] Escrevendo capitulos/20-dynamodb.md (00:16:57). Log: logs/20-dynamodb.escrita.log
+4.978 palavras (sem blocos de código); resumo salvo em `notas/resumos/20-dynamodb.md`.
+Pendências: rotas do entregador sem autenticação (aviso no texto, precisa de revisão de segurança); CDK e código não executados, testar antes da exportação.
+>> [20/24] Concluído: 5051 palavras sem código.
+!! Atenção: capítulo 20 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [21/24] Pesquisando (00:25:47). Log: logs/21-sqs-sns-eventbridge-e-step-functions.pesquisa.log
+ok, 29
+>> [21/24] Escrevendo capitulos/21-sqs-sns-eventbridge-e-step-functions.md (00:26:42). Log: logs/21-sqs-sns-eventbridge-e-step-functions.escrita.log
+Capítulo 21: 4.975 palavras sem código; resumo salvo; checagem mecânica sem ocorrências.
+Pendências: código e CDK não executados, revisar antes de publicar; conferir o caso Kinesis (25/nov/2020) e a dependência circular do `grant_task_response`.
+>> [21/24] Concluído: 5036 palavras sem código.
+!! Atenção: capítulo 21 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [22/24] Pesquisando (00:39:57). Log: logs/22-observabilidade-com-cloudwatch.pesquisa.log
+ok — 31 itens salvos.
+>> [22/24] Escrevendo capitulos/22-observabilidade-com-cloudwatch.md (00:40:58). Log: logs/22-observabilidade-com-cloudwatch.escrita.log
+4.864 palavras, sem contar os blocos de código.
+
+Pendências para o autor:
+- Conferir no console a criação do SLO e o nome das telas de ativação do Transaction Search.
+- Conferir que o formato JSON da Lambda põe os campos `extra` no nível de cima do objeto e deixa o `print` (usado no EMF) como está.
+- Conferir que o trace segue da API para o Step Functions e que a dependência `aws-opentelemetry-distro` traz as instrumentações sem `opentelemetry-bootstrap`.
+- A falta de conexões no Postgres não teve correção definitiva, só alarme; o resumo deixou isso como gancho para o cap. 24.
+>> [22/24] Concluído: 4910 palavras sem código.
+
+>> [23/24] Pesquisando (00:52:02). Log: logs/23-seguranca-em-producao.pesquisa.log
+ok 35
+>> [23/24] Escrevendo capitulos/23-seguranca-em-producao.md (00:53:16). Log: logs/23-seguranca-em-producao.escrita.log
+4.959 palavras sem código; resumo salvo.
+Pendências: confirmar a rota `POST /painel/entrar` (citada no cap. 22 mas sem código em capítulos anteriores); conferir na documentação os pontos que escrevi de memória: AWS Backup (cópia entre contas, Vault Lock), janela e limite mínimo da regra de taxa do WAF e os comandos de root centralizado.
+>> [23/24] Concluído: 5013 palavras sem código.
+!! Atenção: capítulo 23 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [24/24] Pesquisando (01:02:27). Log: logs/24-custos-e-arquitetura.pesquisa.log
+ok, 26
+>> [24/24] Escrevendo capitulos/24-custos-e-arquitetura.md (01:03:12). Log: logs/24-custos-e-arquitetura.escrita.log
+4.992 palavras; capítulo e resumo salvos.
+Pendências: conferir o preço do interface endpoint (US$ 0,01/h, não confirmado nas notas) e os nomes de usage type (ilustrativos) nas saídas do Cost Explorer; a publicação pode exigir aviso de uso de IA.
+>> [24/24] Concluído: 5042 palavras sem código.
+!! Atenção: capítulo 24 fora da faixa de 3.000 a 5.000 palavras.
+
+>> Fim. Capítulos em capitulos/, notas em notas/, logs em logs/.

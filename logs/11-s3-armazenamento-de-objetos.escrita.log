@@ -1,0 +1,2 @@
+4.993 palavras.
+Pendências: os preços do S3 vêm de levantamento de terceiros (conferir na página oficial); o limite de 5 GB por PUT só foi confirmado em fontes secundárias; o código é rascunho, nada foi executado, e precisa de teste e revisão.

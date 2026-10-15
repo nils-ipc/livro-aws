@@ -1,0 +1,7 @@
+4.864 palavras, sem contar os blocos de código.
+
+Pendências para o autor:
+- Conferir no console a criação do SLO e o nome das telas de ativação do Transaction Search.
+- Conferir que o formato JSON da Lambda põe os campos `extra` no nível de cima do objeto e deixa o `print` (usado no EMF) como está.
+- Conferir que o trace segue da API para o Step Functions e que a dependência `aws-opentelemetry-distro` traz as instrumentações sem `opentelemetry-bootstrap`.
+- A falta de conexões no Postgres não teve correção definitiva, só alarme; o resumo deixou isso como gancho para o cap. 24.

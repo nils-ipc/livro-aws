@@ -1,0 +1,2 @@
+Capítulo 21: 4.975 palavras sem código; resumo salvo; checagem mecânica sem ocorrências.
+Pendências: código e CDK não executados, revisar antes de publicar; conferir o caso Kinesis (25/nov/2020) e a dependência circular do `grant_task_response`.

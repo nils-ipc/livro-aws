@@ -1,0 +1,2 @@
+4.985 palavras (sem código). Fontes das buscas já estão nas Referências do capítulo: [AWS ELB 2012](https://aws.amazon.com/message/680587) e [PassRole no ASG](https://docs.aws.amazon.com/autoscaling/ec2/userguide/us-iam-role.html).
+Pendências: o capítulo está no teto de 5.000 palavras; a AMI leva o `api.env` com a senha até o cap. 16 resolver; a data do especial (sábado, 17/out/2026) está fixa no texto; não executei os comandos na AWS, e as saídas mostradas são exemplos que precisam ser conferidos.

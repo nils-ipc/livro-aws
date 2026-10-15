@@ -1,2 +1,2 @@
-O capítulo tem 4.953 palavras, sem contar blocos de código. O resumo do capítulo também está salvo.
-Pendências para o autor: o caso MongoDB de 2017 foi conferido só na CSO Online ([fonte](https://www.csoonline.com/article/3154190/exposed-mongodb-installs-being-erased-held-for-ransom.html)); os links de referência não foram abertos.
+Capítulo 01 com 4.905 palavras (sem blocos de código); resumo salvo com ~370 tokens no `wc`, pouco acima das ~300 palavras pedidas, pois o `wc` conta hífens e símbolos.
+Pendências: conferir os links das RFCs, a saída do `lsof`/`nc` e o caso MongoDB 2017 ([The Register](https://www.theregister.com/2017/01/09/mongodb/), [SiliconANGLE](https://siliconangle.com/2017/01/10/27000-mongodb-installs-hijacked-held-ransom/)); FastAPI apresentado brevemente porque saiu da lista do que o leitor já sabe.

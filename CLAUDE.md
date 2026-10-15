@@ -14,7 +14,8 @@ Esta pasta contém o manuscrito de um livro sobre **AWS** para devs sêniores fu
 │   └── resumos/         # Resumo de cada capítulo escrito (estilo telegráfico)
 ├── exportacao/          # Saída gerada: livro.pdf e livro.epub
 ├── logs/                # Logs do script de escrita
-└── escrever-livro.sh    # Script que escreve os capítulos, um por vez
+├── escrever-livro.sh    # Script que escreve os capítulos, um por vez
+└── escrever-livro.ps1   # O mesmo script, nativo para Windows (PowerShell 7)
 ```
 
 ## Instruções

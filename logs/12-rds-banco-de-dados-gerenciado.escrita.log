@@ -1,0 +1,2 @@
+4998 palavras (o limite é 5.000); o capítulo e o resumo foram salvos.
+Pendências: conferir na doc o que escrevi de memória (gatilhos do storage autoscaling, fórmula do `max_connections`, `--manage-master-user-password`). A senha mestre fica no Secrets Manager, mas a IPC Global prefere o Parameter Store: decidir se mantém.

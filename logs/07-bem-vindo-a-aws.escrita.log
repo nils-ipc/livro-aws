@@ -1,0 +1,2 @@
+4.990 palavras (perto do teto de 5.000; a contagem inclui tabelas e referências).
+Pendências para o autor: conferir as telas atuais do console (MFA, Budgets) e a saída de `describe-availability-zones` em `sa-east-1`; caso real novo citado é o incidente do DynamoDB de 19–20/out/2025 ([fonte](https://aws.amazon.com/message/101925)).

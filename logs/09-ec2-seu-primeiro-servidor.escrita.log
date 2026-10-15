@@ -1,0 +1,2 @@
+4.966 palavras.
+Pendências: conferir numa instância real `dnf install nginx`, `python3.12 -m venv`, o `default_server` do Nginx, as versões de exemplo (Python 3.12.12, nginx 1.28.0) e o texto do erro de `PassRole`; validar os links do Capital One e do blog do IMDSv2; o preço/hora da t3.micro ficou de fora porque não foi confirmado.

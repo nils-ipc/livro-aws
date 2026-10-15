@@ -1,0 +1,2 @@
+4.959 palavras sem código; resumo salvo.
+Pendências: confirmar a rota `POST /painel/entrar` (citada no cap. 22 mas sem código em capítulos anteriores); conferir na documentação os pontos que escrevi de memória: AWS Backup (cópia entre contas, Vault Lock), janela e limite mínimo da regra de taxa do WAF e os comandos de root centralizado.

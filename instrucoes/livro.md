@@ -5,7 +5,7 @@
 Dev **sênior full stack**, **Python + React**, que **sabe muito pouco de DevOps**.
 
 O que o leitor **já sabe** (não explicar):
-- Python (FastAPI/Django/Flask), React, JavaScript/TypeScript.
+- Python (Django/Flask), React, JavaScript/TypeScript.
 - HTTP no nível da aplicação, REST, JSON, SQL, git, terminal, variáveis de ambiente.
 - Arquitetura de aplicação, testes, debugging.
 

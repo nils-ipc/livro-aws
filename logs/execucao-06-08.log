@@ -1,0 +1,23 @@
+>> [06/24] Parte I: sem pesquisa.
+>> [06/24] Escrevendo capitulos/06-producao-de-verdade.md (19:44:06). Log: logs/06-producao-de-verdade.escrita.log
+4.828 palavras.
+Pendências: faltam os resumos 02–05, então a recapitulação e o estado do Rangô (Compose com serviço `db`, worker de fila) foram deduzidos do sumário e precisam ser conferidos; confirmar também as versões das actions (checkout@v5, setup-python@v6, setup-node@v5).
+>> [06/24] Concluído: 4894 palavras sem código.
+
+>> [07/24] Pesquisando (19:50:34). Log: logs/07-bem-vindo-a-aws.pesquisa.log
+ok, 22 itens salvos.
+>> [07/24] Escrevendo capitulos/07-bem-vindo-a-aws.md (19:51:28). Log: logs/07-bem-vindo-a-aws.escrita.log
+4.977 palavras (sem código); capítulo e resumo salvos. Texto ainda é rascunho: falta revisão humana e, se o contrato da editora pedir, aviso de uso de IA.
+Pendências: confirmar o template "Monthly cost budget" e os alertas dele, o link e os detalhes da falha do DynamoDB (out/2025) e se as cotas gratuitas do CloudWatch e do SNS cobrem o alarme.
+>> [07/24] Concluído: 5042 palavras sem código.
+!! Atenção: capítulo 07 fora da faixa de 3.000 a 5.000 palavras.
+
+>> [08/24] Pesquisando (19:56:06). Log: logs/08-iam-quem-pode-fazer-o-que.pesquisa.log
+ok, 31
+>> [08/24] Escrevendo capitulos/08-iam-quem-pode-fazer-o-que.md (19:56:54). Log: logs/08-iam-quem-pode-fazer-o-que.escrita.log
+4.965 palavras; pendências: conferir se a URL do portal realmente não pode ser alterada depois de personalizada, o custo zero do Identity Center, o limite de 2 chaves e as saídas de CLI ilustrativas.
+Caso EleKtra-Leak confirmado na Unit 42 ([The Register](https://theregister.com/2023/10/30/cryptojackers_steal_aws_credentials_github/), [The Hacker News](https://thehackernews.com/2023/10/elektra-leak-cryptojacking-attacks.html?hl=en_US)); o link do relatório original nas referências foi deduzido, não aberto.
+>> [08/24] Concluído: 5033 palavras sem código.
+!! Atenção: capítulo 08 fora da faixa de 3.000 a 5.000 palavras.
+
+>> Fim. Capítulos em capitulos/, notas em notas/, logs em logs/.
