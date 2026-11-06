@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 import uuid
 import zipfile
@@ -221,9 +222,37 @@ def imprimir_pdf(caps: list[Capitulo], tmp: Path) -> None:
         timeout=600,
         capture_output=True,
     )
-    if not destino.exists():
-        raise SystemExit("O navegador não gerou o PDF.")
+    esperar_pdf(destino)
     print(f"PDF:  {destino} ({destino.stat().st_size / 1e6:.1f} MB)")
+
+
+def esperar_pdf(destino: Path, limite: float = 600) -> None:
+    """Espera o PDF ficar pronto.
+
+    Versões recentes do Edge no Windows devolvem o controle na hora e imprimem
+    o PDF num processo em segundo plano, então o arquivo aparece depois. Só
+    consideramos pronto quando termina com %%EOF e o tamanho para de mudar.
+    """
+    fim = time.monotonic() + limite
+    tamanho_anterior, estavel_desde = -1, 0.0
+    while time.monotonic() < fim:
+        if destino.exists():
+            tamanho = destino.stat().st_size
+            if tamanho != tamanho_anterior:
+                tamanho_anterior, estavel_desde = tamanho, time.monotonic()
+            elif time.monotonic() - estavel_desde >= 2 and pdf_completo(destino):
+                return
+        time.sleep(0.5)
+    raise SystemExit("O navegador não gerou o PDF.")
+
+
+def pdf_completo(caminho: Path) -> bool:
+    try:
+        with caminho.open("rb") as f:
+            f.seek(max(0, caminho.stat().st_size - 1024))
+            return b"%%EOF" in f.read()
+    except OSError:  # Arquivo ainda aberto pelo navegador.
+        return False
 
 
 # -------------------------------------------------------------------- EPUB
