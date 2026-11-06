@@ -1,26 +1,26 @@
 # Filas, eventos e sistemas distribuídos
 
-No capítulo anterior, o Rangô aprendeu a crescer para os lados. A API ficou stateless, os carrinhos foram para o Redis, a lista de restaurantes ganhou cache, e o Nginx passou a distribuir as requisições entre várias instâncias, desviando das que caem. Ficou um aviso no fim: nenhuma quantidade de réplicas resolve uma rota que passa a maior parte do tempo esperando outro sistema responder. E ficou uma promessa: explicar por que um `POST /pedidos` que falha no meio não pode simplesmente ser repetido.
+No capítulo anterior, o Rangô aprendeu a crescer para os lados, como todo mundo depois das festas de fim de ano. A API ficou stateless, os carrinhos foram para o Redis, a lista de restaurantes ganhou cache, e o Nginx passou a distribuir as requisições entre várias instâncias, desviando das que caem. Ficou um aviso no fim: nenhuma quantidade de réplicas resolve uma rota que passa a maior parte do tempo esperando outro sistema responder. E ficou uma promessa: explicar por que um `POST /pedidos` que falha no meio não pode simplesmente ser repetido. Quem já apertou F5 numa tela de pagamento conhece o frio na barriga que essa frase provoca.
 
 ## Vinte e cinco segundos para dizer "recebido"
 
-Vamos voltar àquela quinta-feira, às 21h22. Seis instâncias, CPU em 45%, cache funcionando. E o botão "Confirmar pedido" girando sem parar.
+Vamos voltar àquela quinta-feira, às 21h22. Seis instâncias, CPU em 45%, cache funcionando. E o botão "Confirmar pedido" girando sem parar. O círculo que gira é o jeito mais educado que a computação inventou para dizer "não faço a menor ideia de quando isso termina".
 
-Faça a conta do que a rota `POST /pedidos` fazia. Cobrar o cartão no gateway de pagamento levava 2,5 segundos. Avisar o restaurante pela API dele, mais 2 segundos. Enviar o e-mail de confirmação, mais 1 segundo. Em uma noite normal, o cliente esperava 5,5 segundos olhando o botão girar, o que já é ruim. Naquela noite, o provedor de e-mail passou a responder em 20 segundos, e cada confirmação passou a levar 24,5 segundos.
+A conta do que a rota `POST /pedidos` fazia é simples. Cobrar o cartão no gateway de pagamento levava 2,5 segundos. Avisar o restaurante pela API dele, mais 2 segundos. Enviar o e-mail de confirmação, mais 1 segundo. Em uma noite normal, o cliente esperava 5,5 segundos olhando o botão girar, o que já é ruim. Naquela noite, o provedor de e-mail passou a responder em 20 segundos, e cada confirmação passou a levar 24,5 segundos.
 
-Lembra da conta de capacidade do capítulo 4? Um processo que atende uma requisição em 80 ms aguenta cerca de 12 requisições por segundo. Uma rota síncrona do FastAPI (declarada com `def`) roda num pool de 40 threads por processo, e cada pedido ocupa uma thread durante 24,5 segundos. Com seis instâncias, bastaram pouco mais de 240 pedidos simultâneos para ocupar todas as threads. A partir daí, a listagem de restaurantes, que responde em milissegundos e não tem nada a ver com e-mail, ficou na fila atrás dos pedidos. O Rangô inteiro parou por causa de um serviço que só manda uma mensagem de "obrigado pela compra".
+Lembra da conta de capacidade do capítulo 4? Um processo que atende uma requisição em 80 ms aguenta cerca de 12 requisições por segundo. Uma rota síncrona do FastAPI (declarada com `def`) roda num pool de 40 threads por processo, e cada pedido ocupa uma thread durante 24,5 segundos. Com seis instâncias, bastaram pouco mais de 240 pedidos simultâneos para ocupar todas as threads. A partir daí, a listagem de restaurantes, que responde em milissegundos e não tem nada a ver com e-mail, ficou na fila atrás dos pedidos. O Rangô inteiro parou por causa de um serviço que só manda uma mensagem de "obrigado pela compra". Foi o agradecimento mais caro da história da empresa.
 
-E veio o segundo problema. Depois de 15 segundos olhando o botão girar, alguns clientes clicaram de novo. A segunda requisição foi para outra instância, que cobrou o cartão outra vez. Na sexta de manhã, a sua sócia tinha 37 pedidos de reembolso no e-mail.
+E veio o segundo problema. Depois de 15 segundos olhando o botão girar, alguns clientes clicaram de novo. A segunda requisição foi para outra instância, que cobrou o cartão outra vez. Na sexta de manhã, a sua sócia tinha 37 pedidos de reembolso no e-mail. Nenhum daqueles clientes tinha pedido duas lasanhas. O extrato do cartão discordava.
 
 Nenhuma das duas falhas tem a ver com capacidade de processamento. A rota amarra o tempo de resposta ao pior tempo de três sistemas que você não controla, e ela não sabe distinguir um pedido novo de um pedido repetido.
 
 ## O que a API precisa esperar?
 
-Pense em como funciona um restaurante de verdade. O garçom anota o pedido, leva a comanda até a cozinha, prende no trilho e volta para o salão. Ele não fica parado ao lado do fogão esperando a lasanha ficar pronta para só então atender a próxima mesa. A cozinha trabalha no ritmo dela, e o garçom continua atendendo.
+Pense em como funciona um restaurante de verdade. O garçom anota o pedido, leva a comanda até a cozinha, prende no trilho e volta para o salão. Ele não fica parado ao lado do fogão esperando a lasanha ficar pronta para só então atender a próxima mesa. Se ficasse, o restaurante atenderia uma mesa por hora e teria o garçom mais bem informado sobre lasanhas do país. A cozinha trabalha no ritmo dela, e o garçom continua atendendo.
 
 Essa é a diferença entre comunicação **síncrona** e **assíncrona**. Na síncrona, quem chama espera a resposta para continuar, como uma chamada de função comum em Python. Na assíncrona, quem chama entrega o trabalho para alguém e segue em frente; o resultado chega depois, por outro caminho.
 
-Cuidado com uma confusão comum aqui. O `async def` do FastAPI resolve outro problema. Ele permite que um processo atenda outras requisições enquanto espera a rede, mas o cliente daquela requisição continua esperando os 24,5 segundos. O que buscamos é tirar o trabalho de dentro da requisição.
+Cuidado com uma confusão comum aqui. O `async def` do FastAPI resolve outro problema. Ele permite que um processo atenda outras requisições enquanto espera a rede, mas o cliente daquela requisição continua esperando os 24,5 segundos. Ele só espera de um jeito mais elegante, como quem aguarda o ônibus lendo um livro: o ônibus não chega mais cedo por isso. O que buscamos é tirar o trabalho de dentro da requisição.
 
 A pergunta certa para cada etapa do pedido é: o cliente precisa do resultado disto para receber a resposta?
 
@@ -28,7 +28,7 @@ A pergunta certa para cada etapa do pedido é: o cliente precisa do resultado di
 - **Avisar o restaurante:** não. O cliente precisa saber que o pedido foi registrado. Se o restaurante vai receber o aviso em 200 milissegundos ou em 4 segundos, tanto faz para quem está na tela.
 - **E-mail de confirmação:** não. Um e-mail que chega 30 segundos depois ninguém percebe. Um botão que gira 30 segundos todo mundo percebe.
 
-Com essa divisão, a rota cobra o cartão, registra o pedido, deixa um recado dizendo "o pedido 8f3a... foi criado" e responde. O resto acontece depois. O tempo de resposta cai de 24,5 para cerca de 2,5 segundos, e o atraso do provedor de e-mail deixa de afetar a API.
+Com essa divisão, a rota cobra o cartão, registra o pedido, deixa um recado dizendo "o pedido 8f3a... foi criado" e responde. O resto acontece depois. O tempo de resposta cai de 24,5 para cerca de 2,5 segundos, e o atraso do provedor de e-mail deixa de afetar a API. O provedor continua lento, só que agora lento no tempo dele, sem plateia.
 
 > **Dica:** o pagamento também pode sair da requisição, com a tela mostrando "aguardando pagamento" até a confirmação chegar. Fica mais complexo, e o capítulo 21 mostra como orquestrar isso na AWS.
 
@@ -36,23 +36,23 @@ Com essa divisão, a rota cobra o cartão, registra o pedido, deixa um recado di
 
 O "recado" precisa ficar em algum lugar. Esse lugar é uma **fila de mensagens**: um serviço que recebe mensagens de quem produz trabalho e as guarda até que alguém as retire para processar.
 
-O vocabulário é curto. Quem coloca a mensagem na fila é o **produtor** (a API do Rangô). Quem retira e processa é o **consumidor**, também chamado de *worker* (um processo separado que manda e-mails). O serviço que guarda as mensagens no meio é o *broker*. Os mais conhecidos são RabbitMQ, Apache Kafka e o próprio Redis, que você já tem rodando. Na AWS, o equivalente gerenciado é o Amazon SQS, assunto do capítulo 21.
+O vocabulário é curto. Quem coloca a mensagem na fila é o **produtor** (a API do Rangô). Quem retira e processa é o **consumidor**, também chamado de *worker* (um processo separado que manda e-mails). O serviço que guarda as mensagens no meio é o *broker*. Os mais conhecidos são RabbitMQ, Apache Kafka e o próprio Redis, que você já tem rodando. O Kafka ganhou o nome do escritor Franz Kafka porque, segundo Jay Kreps, um dos criadores, era um sistema otimizado para escrita e ele gostava do autor. Quem já configurou um cluster de Kafka desconfia que a homenagem foi ao clima kafkiano da configuração. Na AWS, o equivalente gerenciado é o Amazon SQS, assunto do capítulo 21.
 
 A fila traz três benefícios que valem a pena separar.
 
 O primeiro é o **desacoplamento no tempo**. O produtor e o consumidor não precisam estar no ar ao mesmo tempo. Se o worker de e-mail cair por 10 minutos, a API continua aceitando pedidos; as mensagens se acumulam e são processadas quando ele voltar. Na versão síncrona, 10 minutos de e-mail fora do ar eram 10 minutos sem pedidos.
 
-O segundo é a **absorção de picos**. Se a TV gera 300 pedidos por minuto e o provedor de e-mail aguenta 100, a fila cresce durante o pico e esvazia depois, como uma caixa d'água. Os e-mails só chegam alguns minutos mais tarde.
+O segundo é a **absorção de picos**. Se a TV gera 300 pedidos por minuto e o provedor de e-mail aguenta 100, a fila cresce durante o pico e esvazia depois, como uma caixa d'água. Os e-mails só chegam alguns minutos mais tarde, e ninguém na história abriu um e-mail de confirmação de pedido com pressa.
 
 O terceiro é a **escala independente**. Se a fila de e-mails não para de crescer, você sobe mais workers de e-mail, sem tocar na API. Vários workers lendo a mesma fila disputam as mensagens, e cada mensagem vai para um só deles. Esse arranjo tem nome: *competing consumers*, consumidores concorrentes. Funciona como os cozinheiros pegando a próxima comanda do trilho.
 
-Em troca, você ganha uma peça a mais para operar. A métrica que importa passa a ser a idade da mensagem mais antiga: 5 mil mensagens processadas em um minuto indicam saúde, 20 mensagens paradas há duas horas indicam um worker morto.
+Em troca, você ganha uma peça a mais para operar. A métrica que importa passa a ser a idade da mensagem mais antiga: 5 mil mensagens processadas em um minuto indicam saúde, 20 mensagens paradas há duas horas indicam um worker morto. Em sistemas distribuídos, ninguém morre de forma dramática: o processo só para de responder, como um colega em reunião com a câmera desligada.
 
 ## Pub/sub: um evento, vários interessados
 
-Até aqui, a API manda um recado para o worker de e-mail. Mas o restaurante também precisa saber do pedido. Daqui a alguns meses, o time de dados vai querer contar pedidos por bairro, e alguém vai querer dar pontos de fidelidade. A API vai ter que conhecer cada uma dessas filas e escrever em todas?
+Até aqui, a API manda um recado para o worker de e-mail. Mas o restaurante também precisa saber do pedido. Daqui a alguns meses, o time de dados vai querer contar pedidos por bairro (o time de dados sempre quer contar alguma coisa por bairro), e alguém vai querer dar pontos de fidelidade. A API vai ter que conhecer cada uma dessas filas e escrever em todas?
 
-Existe uma forma mais elegante de pensar nisso. Em vez de mandar **comandos** ("envie este e-mail", "avise este restaurante"), a API publica um **evento**: um fato que aconteceu, com nome no passado. `pedido.criado`. Ela não sabe quem vai se interessar, e nem precisa saber.
+Existe uma forma mais elegante de pensar nisso. Em vez de mandar **comandos** ("envie este e-mail", "avise este restaurante"), a API publica um **evento**: um fato que aconteceu, com nome no passado. `pedido.criado`. Ela não sabe quem vai se interessar, e nem precisa saber. É a fofoca na sua forma mais pura: alguém conta o fato, e quem quiser que faça alguma coisa com ele.
 
 Esse modelo se chama **publish/subscribe**, ou *pub/sub*. O publicador envia o evento para um tópico, e cada assinante recebe a sua própria cópia. É o mesmo princípio dos eventos do navegador que você usa no React: o botão dispara `click`, e quem registrou um listener reage. O botão não conhece os listeners.
 
@@ -64,17 +64,17 @@ A diferença para a fila simples está em quem recebe cada mensagem:
 | Uso típico | Distribuir trabalho | Avisar que algo aconteceu |
 | Analogia | Comanda no trilho da cozinha | Aviso no grupo da família |
 
-Na prática, os dois se combinam. O evento `pedido.criado` é entregue a dois grupos de assinantes, "restaurante" e "e-mail", e dentro de cada grupo pode haver vários workers disputando as mensagens. Esse arranjo de um evento para vários destinos é chamado de *fan-out*. Na AWS, ele aparece como SNS publicando em várias filas SQS, ou como regras do Amazon EventBridge, ambos no capítulo 21. No Mão na massa deste capítulo, você vai montar exatamente isso com Redis Streams.
+Na prática, os dois se combinam. O evento `pedido.criado` é entregue a dois grupos de assinantes, "restaurante" e "e-mail", e dentro de cada grupo pode haver vários workers disputando as mensagens. Esse arranjo de um evento para vários destinos é chamado de *fan-out*. Na AWS, ele aparece como SNS publicando em várias filas SQS, ou como regras do Amazon EventBridge, ambos no capítulo 21. Na parte prática deste capítulo, o Rangô monta exatamente isso com Redis Streams.
 
 Um evento bem desenhado carrega dados suficientes para os assinantes trabalharem sem voltar à API, incluindo o ID do pedido, que vai ser importante daqui a pouco.
 
 ## Pelo menos uma vez
 
-Agora vem a parte em que sistemas distribuídos começam a ficar estranhos.
+Agora vem a parte em que sistemas distribuídos começam a ficar estranhos. Leslie Lamport já tinha avisado, numa definição famosa: um sistema distribuído é aquele em que a falha de um computador que você nem sabia que existia pode deixar o seu próprio computador inutilizável.
 
 Um worker retira a mensagem da fila, envia o e-mail e avisa o broker: "pronto, pode apagar". Esse aviso se chama **confirmação**, ou *ack* (de *acknowledgement*). Enquanto o ack não chega, o broker mantém a mensagem guardada. Se o worker morrer antes de confirmar, o broker entrega a mensagem de novo, para ele mesmo quando voltar ou para outro worker.
 
-Agora acompanhe o pior momento possível. O worker envia o e-mail com sucesso. Um milissegundo depois, antes de mandar o ack, o container é reiniciado por um deploy. Para o broker, a mensagem nunca foi processada. Ele a entrega de novo, e o cliente recebe dois e-mails.
+Agora acompanhe o pior momento possível. O worker envia o e-mail com sucesso. Um milissegundo depois, antes de mandar o ack, o container é reiniciado por um deploy. Para o broker, a mensagem nunca foi processada. Ele a entrega de novo, e o cliente recebe dois e-mails. Ele não reclama; no máximo, conclui que o Rangô gosta muito dele.
 
 Você poderia inverter a ordem: confirmar primeiro, processar depois. Aí o problema se inverte. Se o worker morrer entre o ack e o envio, a mensagem some e o e-mail nunca sai.
 
@@ -85,35 +85,37 @@ Não existe uma terceira ordem. Entre o efeito no mundo externo e o aviso ao bro
 
 Para pedidos de comida, perder o aviso ao restaurante significa um cliente com fome esperando uma lasanha que ninguém vai preparar. Quase todo sistema escolhe **pelo menos uma vez**, e quase todos os brokers trabalham assim por padrão, incluindo o SQS.
 
+Existe uma piada clássica entre quem trabalha com isso: "Os dois problemas mais difíceis em sistemas distribuídos são: 2. entregar a mensagem exatamente uma vez; 1. garantir a ordem das mensagens; 2. entregar a mensagem exatamente uma vez." Quem ri de nervoso já passou por isso.
+
 > **Armadilha:** algumas ferramentas anunciam entrega "exatamente uma vez" (*exactly-once*). Leia as letras miúdas. Em geral, a garantia vale dentro do próprio sistema (o Kafka, por exemplo, consegue isso entre tópicos dele mesmo) ou dentro de uma janela de deduplicação limitada. No instante em que o worker manda um e-mail ou chama a API de um restaurante, a garantia acaba. O efeito "exatamente uma vez" no mundo real é algo que o seu código constrói.
 
 E como o seu código constrói isso? Com idempotência.
 
 ## Idempotência: repetir sem estragar
 
-Uma operação é **idempotente** quando executá-la duas vezes tem o mesmo efeito que executá-la uma vez. `pedido.status = "pago"` é idempotente: rodar de novo não muda nada. Já `saldo -= 58.90` tira mais dinheiro a cada execução.
+Uma operação é **idempotente** quando executá-la duas vezes tem o mesmo efeito que executá-la uma vez. `pedido.status = "pago"` é idempotente: rodar de novo não muda nada. Já `saldo -= 58.90` tira mais dinheiro a cada execução. É a operação favorita do banco e a menos favorita do cliente.
 
 Você já conhece isso do HTTP. `GET`, `PUT` e `DELETE` são idempotentes pela especificação; `POST` não. Foi por isso que, no capítulo 4, o Nginx reenviou as requisições `GET` para outra instância quando uma caiu, mas deixou o `POST /pedidos` falhar. Ele não tinha como saber se a instância chegou a cobrar o cartão antes de cair.
 
 A solução clássica para tornar um `POST` seguro de repetir é a **chave de idempotência** (*idempotency key*). O cliente gera um identificador único para aquela intenção ("este pedido, desta tela") e o envia num cabeçalho. O servidor guarda a chave junto com a resposta. Se a mesma chave chegar de novo, ele devolve a resposta guardada, sem cobrar outra vez.
 
-O detalhe que faz isso funcionar está em **quem gera a chave**. Se o servidor gerasse, cada clique viraria uma chave nova e nada mudaria. Quem gera é o React, uma única vez quando a tela de confirmação abre. O cliente pode clicar dez vezes, a rede pode reenviar, o usuário pode atualizar a página no meio: todas as tentativas carregam a mesma chave.
+O detalhe que faz isso funcionar está em **quem gera a chave**. Se o servidor gerasse, cada clique viraria uma chave nova e nada mudaria. Quem gera é o React, uma única vez quando a tela de confirmação abre. O cliente pode clicar dez vezes (e vai, porque todo usuário acredita que clicar com mais força faz a internet andar mais rápido), a rede pode reenviar, o usuário pode atualizar a página no meio: todas as tentativas carregam a mesma chave.
 
-> **Na vida real:** a API da Stripe, uma das mais usadas para pagamentos, aceita o cabeçalho `Idempotency-Key` em requisições `POST` exatamente para isso. Se uma requisição de cobrança falha por timeout, o cliente reenvia com a mesma chave, e a Stripe devolve o resultado da primeira tentativa em vez de cobrar duas vezes. O gateway do Rangô, nos exemplos deste capítulo, segue o mesmo modelo.
+> **Na vida real:** a API da Stripe, uma das mais usadas para pagamentos, aceita o cabeçalho `Idempotency-Key` em requisições `POST` exatamente para isso. Se uma requisição de cobrança falha por timeout, o cliente reenvia com a mesma chave, e a Stripe devolve o resultado da primeira tentativa em vez de cobrar duas vezes. Uma empresa que vive de cobrar levou muito a sério a ideia de não cobrar demais. O gateway do Rangô, nos exemplos deste capítulo, segue o mesmo modelo.
 
 Do lado dos workers, vale o mesmo princípio. O evento chega com o ID do pedido. Antes de enviar o e-mail, o worker verifica se já existe um registro "e-mail do pedido 8f3a... enviado". Se existir, ele confirma a mensagem e segue. Assim, uma entrega repetida vira uma operação inofensiva.
 
 Repare que a verificação reduz a janela de duplicação, sem fechá-la por completo. Se o worker enviar o e-mail e morrer antes de gravar a marca, a próxima entrega envia de novo. Para e-mail, um duplicado raro é aceitável. Para dinheiro, você empurra a idempotência até o sistema que move o dinheiro, passando a chave para o gateway, como a Stripe permite. A regra prática: a proteção mais forte fica o mais perto possível do efeito.
 
-## Tente de novo, mas com calma
+## Tentar de novo, mas com calma
 
 Falhas passageiras são o normal em sistemas distribuídos. O provedor de e-mail devolve `503` por um segundo, uma conexão cai, um DNS demora. Tentar de novo resolve a maioria delas. Só que existe um jeito errado de tentar de novo, e ele já derrubou sistemas grandes.
 
-O provedor de e-mail daquela quinta-feira falhava porque recebia mais do que aguentava. Se cada worker tentar de novo imediatamente, sem parar, a carga sobre quem já está caindo se multiplica, e ele não se recupera. Esse efeito se chama **tempestade de retentativas** (*retry storm*).
+O provedor de e-mail daquela quinta-feira falhava porque recebia mais do que aguentava. Se cada worker tentar de novo imediatamente, sem parar, a carga sobre quem já está caindo se multiplica, e ele não se recupera. Esse efeito se chama **tempestade de retentativas** (*retry storm*). É a estratégia de quem aperta F5 sem parar no site de venda de ingressos de um show disputado, só que automatizada e multiplicada por mil workers.
 
 A primeira correção é o **backoff exponencial**: esperar cada vez mais entre as tentativas. Meio segundo, depois 1, depois 2, depois 4, com um teto (30 segundos, por exemplo). O sistema que está caindo ganha fôlego.
 
-A segunda correção é menos óbvia. Se mil workers falharem no mesmo instante e todos usarem backoff exponencial, todos esperam exatamente 1 segundo e voltam juntos, como uma multidão empurrando a porta no mesmo segundo. A solução é o **jitter**: sortear o tempo de espera dentro do intervalo. Em vez de esperar 4 segundos, cada worker espera um valor aleatório entre 0 e 4. As tentativas se espalham. É a mesma ideia do TTL com jitter que você usou no cache do capítulo 4.
+A segunda correção é menos óbvia. Se mil workers falharem no mesmo instante e todos usarem backoff exponencial, todos esperam exatamente 1 segundo e voltam juntos, como uma multidão empurrando a porta no mesmo segundo. A solução é o **jitter**: sortear o tempo de espera dentro do intervalo. Em vez de esperar 4 segundos, cada worker espera um valor aleatório entre 0 e 4. As tentativas se espalham. É o único lugar da computação em que um pouco de bagunça de propósito organiza tudo. É a mesma ideia do TTL com jitter que você usou no cache do capítulo 4.
 
 ```python
 espera = random.uniform(0, min(teto, base * 2 ** tentativa))
@@ -125,9 +127,9 @@ Retentativa também precisa de limite. Sem ele, uma mensagem que nunca vai dar c
 
 ## A mensagem envenenada
 
-Algumas mensagens nunca vão dar certo. O e-mail do cliente é `ana@@exemplo.com`, e o provedor recusa. O evento foi publicado com um campo faltando por causa de um bug. Nenhuma quantidade de retentativas resolve isso.
+Algumas mensagens nunca vão dar certo. O e-mail do cliente é `ana@@exemplo.com`, e o provedor recusa. Alguém digitou com pressa, ou o arroba gaguejou. O evento foi publicado com um campo faltando por causa de um bug. Nenhuma quantidade de retentativas resolve isso.
 
-Essa é a **mensagem envenenada** (*poison message*). Sem tratamento, ela é reentregue para sempre, consome o tempo dos workers e, em alguns brokers, bloqueia as mensagens que vêm atrás dela.
+Essa é a **mensagem envenenada** (*poison message*). O nome é dramático, mas justo: basta uma para estragar o almoço de todos os workers. Sem tratamento, ela é reentregue para sempre, consome o tempo dos workers e, em alguns brokers, bloqueia as mensagens que vêm atrás dela.
 
 A saída é a **fila de mensagens mortas**, ou *dead letter queue* (DLQ). Depois de um número máximo de tentativas, a mensagem é movida para uma fila separada, junto com a causa do erro, e sai do caminho. A fila principal volta a andar. A DLQ funciona como a caixa de "pedidos com problema" no balcão: ninguém joga fora, alguém olha com calma depois, corrige a causa e reprocessa.
 
@@ -137,17 +139,19 @@ Uma DLQ só tem valor se alguém olhar para ela. Uma DLQ sem alarme é uma lixei
 
 Com o pedido assíncrono, aparece uma situação nova. O cliente recebe "pedido recebido" às 21h22min03s. O painel do restaurante mostra o pedido às 21h22min05s. Durante 2 segundos, o sistema discorda de si mesmo: para a API, o pedido existe; para o restaurante, ainda não.
 
+É o "já estou saindo de casa" da computação: uma afirmação que vai ser verdade em algum momento, não necessariamente agora.
+
 Isso se chama **consistência eventual**: se nada mais mudar, todas as partes acabam concordando, mas não instantaneamente. É o oposto do que você está acostumado com uma transação no Postgres, em que o `COMMIT` torna tudo visível de uma vez.
 
 O cuidado está na interface. Se a tela seguinte busca "meus pedidos" num lugar atualizado por um worker, o pedido recém-criado pode não aparecer, e o cliente confirma de novo. Mostre o pedido a partir da resposta da própria API e deixe a atualização chegar depois.
 
-A ordem também deixa de ser garantida: com vários workers, `pedido.cancelado` pode ser processado antes de `pedido.criado`. Eventos com número de versão permitem ao consumidor ignorar uma informação mais antiga do que a que já tem.
+A ordem também deixa de ser garantida: com vários workers, `pedido.cancelado` pode ser processado antes de `pedido.criado`, e o restaurante recebe o cancelamento de uma lasanha que nem sabia que existia. Eventos com número de versão permitem ao consumidor ignorar uma informação mais antiga do que a que já tem.
 
 Por fim, a **escrita dupla**: a API grava o pedido e depois publica o evento. Se ela cair entre as duas operações, ninguém avisa o restaurante. O padrão **transactional outbox** resolve isso gravando o pedido e o evento numa tabela `outbox`, na mesma transação do banco, e deixando um processo separado publicar o que está nela. Quando os pedidos do Rangô forem para o Postgres, ele merece atenção.
 
 ## As oito falácias
 
-Em 1994, Peter Deutsch, então na Sun Microsystems, listou suposições que todo desenvolvedor faz ao escrever o primeiro sistema distribuído, e que estão todas erradas. A lista original tinha sete; James Gosling acrescentou a oitava depois. Elas ficaram conhecidas como **as falácias da computação distribuída**:
+Em 1994, Peter Deutsch, então na Sun Microsystems, listou suposições que todo desenvolvedor faz ao escrever o primeiro sistema distribuído, e que estão todas erradas. A lista original tinha sete; James Gosling acrescentou a oitava depois. Combina que a falácia da rede homogênea tenha vindo do criador do Java, a linguagem do slogan "escreva uma vez, rode em qualquer lugar". Ele conhecia de perto o trabalho que dava cumprir essa promessa. Elas ficaram conhecidas como **as falácias da computação distribuída**:
 
 1. A rede é confiável.
 2. A latência é zero.
@@ -158,11 +162,13 @@ Em 1994, Peter Deutsch, então na Sun Microsystems, listou suposições que todo
 7. O custo de transporte é zero.
 8. A rede é homogênea.
 
+A lista tem mais de trinta anos e continua atual, o que diz pouco sobre a lista e bastante sobre nós.
+
 A rota síncrona do Rangô acreditava nas duas primeiras: que o provedor de e-mail responderia sempre e rápido. O gateway, o provedor e a API do restaurante pertencem a empresas diferentes, cada uma com seus deploys de sexta-feira (falácia 6). E a falácia 7 vai aparecer na sua fatura no capítulo 24, como tráfego de saída.
 
-## Mão na massa: o pedido sai da requisição
+## Na prática: o pedido sai da requisição
 
-Você vai reproduzir a quinta-feira, separar o pedido em uma parte síncrona e uma assíncrona com Redis Streams, adicionar idempotência e ver uma mensagem ser reentregue e outra ir para a DLQ.
+O exemplo reproduz a quinta-feira, separa o pedido em uma parte síncrona e uma assíncrona com Redis Streams, adiciona idempotência e mostra uma mensagem sendo reentregue e outra indo para a DLQ. As saídas aparecem todas, então dá para acompanhar a quinta-feira inteira sem precisar sofrer uma.
 
 Pré-requisitos: o projeto como terminou o capítulo 4 (`compose.yaml` com `api`, `redis` e `proxy`, certificados do mkcert em `certs/`), Docker com Compose e o `uuidgen`, que vem no macOS e na maioria das distribuições Linux. Os comandos usam a variável `CA` do capítulo anterior:
 
@@ -172,7 +178,7 @@ CA="$(mkcert -CAROOT)/rootCA.pem"
 
 ### Etapa 1: serviços externos de mentira
 
-O Rangô ainda não tem gateway de pagamento nem provedor de e-mail de verdade. Para os testes, crie um módulo que simula os três serviços externos, com atraso e taxa de falha controlados por variáveis de ambiente:
+O Rangô ainda não tem gateway de pagamento nem provedor de e-mail de verdade. Para os testes, entra em cena um módulo que simula os três serviços externos, com atraso e taxa de falha controlados por variáveis de ambiente. Eles têm uma vantagem enorme sobre os de verdade: falham exatamente quando alguém pede.
 
 ```python
 # backend/app/externos.py
@@ -206,7 +212,7 @@ def enviar_email(pedido: dict) -> None:
     print(f"e-mail enviado: pedido {pedido['id']} para {pedido['usuario']}", flush=True)
 ```
 
-Agora a versão síncrona da rota, igual à que travou na quinta-feira. No `main.py`, acrescente:
+Agora a versão síncrona da rota, igual à que travou na quinta-feira. No `main.py`, entra este trecho:
 
 ```python
 # backend/app/main.py (versão síncrona, para reproduzir o problema)
@@ -230,7 +236,7 @@ def criar_pedido(novo: NovoPedido):
     return {"id": pedido["id"], "status": "confirmado"}
 ```
 
-No `compose.yaml`, mude a imagem da API para `rango-api:0.4.0` e repasse o atraso do e-mail, com 1 segundo como padrão:
+No `compose.yaml`, a imagem da API muda para `rango-api:0.4.0` e o atraso do e-mail é repassado, com 1 segundo como padrão:
 
 ```yaml
 # compose.yaml (trecho do serviço api)
@@ -243,7 +249,7 @@ No `compose.yaml`, mude a imagem da API para `rango-api:0.4.0` e repasse o atras
       ATRASO_EMAIL: "${ATRASO_EMAIL:-1}"
 ```
 
-Suba e meça:
+Com tudo de pé, a medição fica assim:
 
 ```bash
 docker compose up -d --build --scale api=3
@@ -259,7 +265,7 @@ curl -s -o /dev/null --cacert "$CA" -w "%{http_code} em %{time_total}s\n" \
 200 em 5.531s
 ```
 
-Agora a quinta-feira. Recrie a API com o e-mail lento e repita o `curl`:
+Agora a quinta-feira. A API é recriada com o e-mail lento, e o mesmo `curl` é repetido:
 
 ```bash
 ATRASO_EMAIL=20 docker compose up -d --scale api=3
@@ -270,7 +276,9 @@ docker compose restart proxy
 200 em 24.538s
 ```
 
-Com o e-mail lento, dispare 150 pedidos em paralelo e meça a listagem de restaurantes logo em seguida:
+Vinte e quatro segundos e meio. Nesse tempo, o cliente desiste, baixa o app do concorrente e ainda cria uma conta.
+
+Com o e-mail lento, o teste seguinte dispara 150 pedidos em paralelo e mede a listagem de restaurantes logo em seguida:
 
 ```bash
 for i in $(seq 150); do
@@ -285,15 +293,15 @@ curl -s -o /dev/null --cacert "$CA" -w "listagem em %{time_total}s\n" \
 
 As três instâncias rodam um processo Uvicorn cada, com 40 threads para rotas síncronas: 120 lugares para 150 pedidos. As threads ficam todas ocupadas esperando o e-mail, e a listagem, que respondia em milissegundos com o cache quente, entra na fila atrás dos pedidos e passa de 20 segundos. É a quinta-feira em miniatura.
 
-Ao terminar, espere os pedidos concluírem antes de seguir.
+Antes de seguir, é preciso esperar os pedidos concluírem.
 
 ### Etapa 2: o evento vai para um stream
 
 O Redis tem uma estrutura feita para isso: o **stream**, um log de mensagens em que só se acrescenta no fim. Cada mensagem ganha um ID com o horário em milissegundos (`1760479323512-0`). Com os **grupos de consumidores** do Redis, cada grupo recebe todas as mensagens do stream (o pub/sub) e, dentro de um grupo, cada mensagem vai para um só consumidor (a fila). O Redis mantém, para cada grupo, uma lista de mensagens entregues e ainda sem ack, a *pending entries list*. É ela que garante o "pelo menos uma vez".
 
-Os comandos que importam são poucos: `XADD` publica, `XREADGROUP` lê como membro de um grupo, `XACK` confirma.
+Os comandos que importam são poucos: `XADD` publica, `XREADGROUP` lê como membro de um grupo, `XACK` confirma. Os nomes parecem siglas de repartição pública, mas, ao contrário das repartições, fazem exatamente o que prometem.
 
-Substitua o trecho inteiro da etapa anterior pela versão nova. Ela cobra o cartão, grava o pedido, publica `pedido.criado` e responde `202 Accepted`, o código HTTP para "recebi e vou processar":
+A versão nova substitui o trecho inteiro da etapa anterior. Ela cobra o cartão, grava o pedido, publica `pedido.criado` e responde `202 Accepted`, o código HTTP para "recebi e vou processar". É o "pode deixar comigo" do protocolo, com a diferença de que, aqui, alguém vai mesmo fazer:
 
 ```python
 # backend/app/main.py (pedido assíncrono e idempotente)
@@ -349,7 +357,7 @@ Note também que a chave de idempotência vai para o gateway em `cobrar_cartao`.
 
 ### Etapa 3: os workers
 
-Cada assinante é um processo separado, usando a mesma imagem da API com outro comando. Crie o worker:
+Cada assinante é um processo separado, usando a mesma imagem da API com outro comando. O worker fica assim:
 
 ```python
 # backend/app/worker.py
@@ -428,11 +436,11 @@ if __name__ == "__main__":
     main()
 ```
 
-Ao iniciar, o worker lê com o ID `"0"`, que no `XREADGROUP` significa "me devolva as mensagens entregues a mim e não confirmadas", ou seja, as que ele processava quando morreu. Só depois de esvaziar essa lista ele passa para `">"`, as mensagens novas. O nome do consumidor vem do hostname do container, que se mantém quando o mesmo container é reiniciado.
+Ao iniciar, o worker lê com o ID `"0"`, que no `XREADGROUP` significa "me devolva as mensagens entregues a mim e não confirmadas", ou seja, as que ele processava quando morreu. Só depois de esvaziar essa lista ele passa para `">"`, as mensagens novas. O nome do consumidor vem do hostname do container, que se mantém quando o mesmo container é reiniciado. Antes de pegar trabalho novo, ele termina o que deixou pela metade, um hábito que muita gente com anos de carreira ainda não adquiriu.
 
 Em `processar`, a ordem é: o trabalho, depois a marca `feito:email:<id>`, por último o `XACK`. Uma mensagem que vai para a DLQ também recebe ack, porque foi tratada, só que com outro destino.
 
-Atualize o `compose.yaml` com os dois workers e libere os atrasos e falhas por variável:
+O `compose.yaml` ganha os dois workers, com os atrasos e as falhas liberados por variável:
 
 ```yaml
 # compose.yaml
@@ -487,14 +495,14 @@ services:
     restart: unless-stopped
 ```
 
-Os três serviços apontam para a mesma imagem com `build`, para que o Compose saiba construí-la em vez de tentar baixá-la de um registry. Suba tudo com o e-mail lento de novo, para comparar com a quinta-feira:
+Os três serviços apontam para a mesma imagem com `build`, para que o Compose saiba construí-la em vez de tentar baixá-la de um registry. Tudo sobe com o e-mail lento de novo, para comparar com a quinta-feira:
 
 ```bash
 ATRASO_EMAIL=20 docker compose up -d --build --scale api=3
 docker compose restart proxy
 ```
 
-Envie um pedido com uma chave de idempotência:
+Agora, um pedido com uma chave de idempotência:
 
 ```bash
 CHAVE=$(uuidgen)
@@ -510,7 +518,7 @@ curl -s --cacert "$CA" -w "\n%{http_code} em %{time_total}s\n" \
 202 em 2.524s
 ```
 
-De 24,5 para 2,5 segundos, com o mesmo provedor de e-mail lento. Acompanhe os workers:
+De 24,5 para 2,5 segundos, com o mesmo provedor de e-mail lento. Os logs dos workers contam o resto:
 
 ```bash
 docker compose logs -f worker-restaurante worker-email
@@ -521,14 +529,14 @@ worker-restaurante-1  | restaurante avisado: pedido 8f3a2c1e-5b7d-4e9a-a1c2-3d4e
 worker-email-1        | e-mail enviado: pedido 8f3a2c1e-5b7d-4e9a-a1c2-3d4e5f6a7b8c para ana
 ```
 
-O restaurante foi avisado 2 segundos depois, e o e-mail saiu 20 segundos depois, sem ninguém esperando por ele. Agora repita exatamente o mesmo `curl`, com a mesma `$CHAVE`:
+O restaurante foi avisado 2 segundos depois, e o e-mail saiu 20 segundos depois, sem ninguém esperando por ele. Repetindo exatamente o mesmo `curl`, com a mesma `$CHAVE`, a resposta é:
 
 ```text
 {"id":"8f3a2c1e-5b7d-4e9a-a1c2-3d4e5f6a7b8c","status":"recebido"}
 202 em 0.011s
 ```
 
-Mesmo ID, 11 milissegundos, nenhuma cobrança nova e nenhum evento novo. Para simular o clique duplo, gere outra chave e dispare duas requisições ao mesmo tempo:
+Mesmo ID, 11 milissegundos, nenhuma cobrança nova e nenhum evento novo. Para simular o clique duplo, o exemplo gera outra chave e dispara duas requisições ao mesmo tempo:
 
 ```bash
 CHAVE=$(uuidgen)
@@ -547,7 +555,7 @@ wait
 202
 ```
 
-Uma passou, a outra foi barrada.
+Uma passou, a outra foi barrada. Se essa rota existisse naquela quinta-feira, a caixa de e-mail da sua sócia teria amanhecido bem mais tranquila.
 
 ### Etapa 4: a chave nasce no React
 
@@ -592,9 +600,9 @@ export function ConfirmarPedido({ usuario, restaurante, total }: Props) {
 }
 ```
 
-O `disabled` no botão ajuda, mas não cobre uma requisição repetida pela rede ou por um retry. A chave no `useState` com função inicializadora é gerada uma vez e sobrevive às novas renderizações. O `crypto.randomUUID()` só existe em contextos seguros, como HTTPS ou `localhost`, e o Rangô já roda em `https://rango.test` desde o capítulo 2.
+O `disabled` no botão ajuda, mas não cobre uma requisição repetida pela rede ou por um retry. Ele é o equivalente de interface a esconder o pote de biscoitos no alto do armário: funciona até alguém achar um banquinho. A chave no `useState` com função inicializadora é gerada uma vez e sobrevive às novas renderizações. O `crypto.randomUUID()` só existe em contextos seguros, como HTTPS ou `localhost`, e o Rangô já roda em `https://rango.test` desde o capítulo 2.
 
-Falta um ajuste no backend. O CORS do `main.py` ainda libera só `GET`, como ficou desde o capítulo 1, e o navegador vai barrar o `POST` na requisição de *preflight*. Atualize a linha:
+Falta um ajuste no backend. O CORS tem esse talento: some durante semanas e reaparece justo quando tudo parecia pronto. O do `main.py` ainda libera só `GET`, como ficou desde o capítulo 1, e o navegador vai barrar o `POST` na requisição de *preflight*. A linha corrigida fica assim:
 
 ```python
     allow_methods=["GET", "POST"],
@@ -604,7 +612,7 @@ O `allow_headers=["*"]` já cobre o cabeçalho `Idempotency-Key`.
 
 ### Etapa 5: derrubando um worker no meio do trabalho
 
-Com o e-mail ainda em 20 segundos, envie um pedido novo (com uma chave nova) e, logo depois, mate o worker de e-mail sem dar tempo de ele terminar:
+Com o e-mail ainda em 20 segundos, o exemplo envia um pedido novo (com uma chave nova) e, logo depois, mata o worker de e-mail sem dar tempo de ele terminar:
 
 ```bash
 CHAVE=$(uuidgen)
@@ -615,7 +623,7 @@ sleep 5
 docker compose kill worker-email
 ```
 
-O `kill` manda `SIGKILL`, o equivalente a puxar o cabo da tomada. Veja o que o Redis sabe sobre isso:
+O `kill` manda `SIGKILL`, o equivalente a puxar o cabo da tomada. O processo não tem direito nem a últimas palavras. O Redis, porém, anotou tudo:
 
 ```bash
 docker compose exec redis redis-cli XPENDING eventos:pedidos email
@@ -629,7 +637,7 @@ docker compose exec redis redis-cli XPENDING eventos:pedidos email
       2) "1"
 ```
 
-Uma mensagem entregue ao consumidor `9b1c4d2e8f7a` (o hostname do container) e nunca confirmada. Suba o worker de novo:
+Uma mensagem entregue ao consumidor `9b1c4d2e8f7a` (o hostname do container) e nunca confirmada. O worker volta com os comandos abaixo, e os logs mostram:
 
 ```bash
 docker compose start worker-email
@@ -641,18 +649,18 @@ worker-email-1  | worker email (9b1c4d2e8f7a) aguardando eventos
 worker-email-1  | e-mail enviado: pedido 4e7d1a9b-... para bruno
 ```
 
-O worker leu primeiro a própria lista de pendentes e terminou o trabalho interrompido. Nada se perdeu.
+O worker leu primeiro a própria lista de pendentes e terminou o trabalho interrompido. Nada se perdeu. Lavoisier ficaria orgulhoso.
 
 ### Etapa 6: a mensagem que vai para a DLQ
 
-Faça o provedor de e-mail falhar sempre, deixe o atraso curto e envie um pedido:
+Agora o provedor de e-mail passa a falhar sempre, com atraso curto:
 
 ```bash
 ATRASO_EMAIL=0.2 FALHA_EMAIL=1 docker compose up -d --scale api=3
 docker compose restart proxy
 ```
 
-Depois de enviar outro pedido com uma chave nova (o mesmo `curl` da etapa anterior), os logs mostram o backoff com jitter trabalhando:
+Depois de enviar outro pedido com uma chave nova (o mesmo `curl` da etapa anterior), os logs mostram o backoff com jitter trabalhando. O worker insiste com a paciência de quem liga para o SAC e, na quinta tentativa, desiste com dignidade:
 
 ```text
 worker-email-1  | tentativa 1 falhou (email respondeu 503); nova em 0.7s
@@ -662,7 +670,7 @@ worker-email-1  | tentativa 4 falhou (email respondeu 503); nova em 6.2s
 worker-email-1  | pedido c2a9e0f4-... foi para a DLQ: email respondeu 503
 ```
 
-Os tempos variam a cada execução, por causa do jitter. Confira a DLQ:
+Os tempos variam a cada execução, por causa do jitter. A consulta à DLQ:
 
 ```bash
 docker compose exec redis redis-cli XRANGE eventos:pedidos:dlq - +
@@ -678,13 +686,13 @@ Tudo roda local. Para derrubar:
 docker compose down
 ```
 
-O Redis não tem volume, então o stream, a DLQ e os pedidos somem junto.
+O Redis não tem volume, então o stream, a DLQ e os pedidos somem junto. É a faxina mais rápida deste livro.
 
 ## Armadilhas e casos reais
 
-> **Armadilha:** retentativa em várias camadas. Se o React tenta 3 vezes, o Nginx tenta 3 vezes e a API tenta 3 vezes no gateway, uma única falha vira 27 chamadas ao serviço que já estava com problema. Escolha uma camada para tentar de novo, normalmente a mais próxima da chamada, e faça as outras falharem rápido.
+> **Armadilha:** retentativa em várias camadas. Se o React tenta 3 vezes, o Nginx tenta 3 vezes e a API tenta 3 vezes no gateway, uma única falha vira 27 chamadas ao serviço que já estava com problema. São os juros compostos, aplicados ao pior dia do seu fornecedor. Escolha uma camada para tentar de novo, normalmente a mais próxima da chamada, e faça as outras falharem rápido.
 
-> **Armadilha:** timeout ausente. Uma chamada sem timeout pode esperar para sempre, e um worker preso para sempre é um worker a menos. A biblioteca `requests`, por exemplo, não define timeout nenhum por padrão. Toda chamada de rede precisa de um limite explícito, menor que o timeout de quem está esperando por você.
+> **Armadilha:** timeout ausente. Uma chamada sem timeout pode esperar para sempre, e um worker preso para sempre é um worker a menos. A biblioteca `requests`, por exemplo, não define timeout nenhum por padrão. Ela confia na rede com o otimismo de quem nunca leu a falácia número 1. Toda chamada de rede precisa de um limite explícito, menor que o timeout de quem está esperando por você.
 
 > **Armadilha:** worker que demora mais que o prazo do broker. No Redis Streams, uma mensagem pendente fica com o consumidor original até alguém reivindicá-la com `XAUTOCLAIM`. No SQS, a mensagem volta a ficar visível para outros workers depois de um prazo chamado *visibility timeout*. Se o processamento demorar mais que esse prazo, dois workers acabam processando a mesma mensagem ao mesmo tempo. O capítulo 21 mostra como ajustar isso.
 
@@ -692,7 +700,7 @@ O Redis não tem volume, então o stream, a DLQ e os pedidos somem junto.
 
 > **Armadilha:** chave de idempotência sem relação com o conteúdo. Se o cliente reenviar a mesma chave com outro total, o Rangô devolve a resposta antiga. Implementações mais cuidadosas guardam um hash do corpo junto com a chave e devolvem erro quando ele muda, como faz a Stripe.
 
-> **Dica:** no SQS, a idade da mensagem mais antiga é a métrica `ApproximateAgeOfOldestMessage`, e você vai criar um alarme para ela no capítulo 22.
+> **Dica:** no SQS, a idade da mensagem mais antiga é a métrica `ApproximateAgeOfOldestMessage`, e o Rangô ganha um alarme para ela no capítulo 22.
 
 ## Resumo
 
@@ -709,7 +717,7 @@ O Redis não tem volume, então o stream, a DLQ e os pedidos somem junto.
 
 Sábado, 3h07. O Rangô está mais calmo do que nunca. Os pedidos entram, a API responde em 2,5 segundos, os workers avisam restaurantes e mandam e-mails, e a DLQ está vazia.
 
-Às 3h12, o disco da máquina onde roda o Postgres de produção apresenta defeito. O banco volta, mas a tabela de pedidos está corrompida. Às 3h40, você está acordado, de pijama, olhando o terminal. Alguém lembra que existe um script de backup. Ele rodava no notebook do desenvolvedor que saiu da empresa em março. O último arquivo `.sql` que você encontra é de três semanas atrás, e ninguém nunca testou restaurar um deles.
+Às 3h12, o disco da máquina onde roda o Postgres de produção apresenta defeito. O banco volta, mas a tabela de pedidos está corrompida. Às 3h40, você está acordado, de pijama, olhando o terminal. Incidentes graves têm uma preferência inexplicável pela madrugada de sábado. Alguém lembra que existe um script de backup. Ele rodava no notebook do desenvolvedor que saiu da empresa em março. O backup, como a samambaia da recepção, era responsabilidade de alguém que não trabalha mais aqui. O último arquivo `.sql` que você encontra é de três semanas atrás, e ninguém nunca testou restaurar um deles.
 
 Quantos pedidos você aceita perder? Quanto tempo o Rangô pode ficar fora do ar enquanto você restaura? Como saber que algo quebrou antes de um cliente reclamar no Instagram? E como fazer um deploy às 18h de uma sexta sem prender a respiração? No próximo capítulo, o último da Parte I, você vai ver o que separa um sistema que funciona de um sistema pronto para produção: backups, réplicas, RPO e RTO, infraestrutura como código, pipelines de deploy e observabilidade.
 

@@ -1,14 +1,14 @@
 # Route 53, CloudFront e certificados
 
-No capítulo 13, o Rangô passou a rodar atrás do Application Load Balancer `rango-alb`, com um Auto Scaling Group de 2 a 6 instâncias criadas a partir da AMI `rango-api-20261015`, nas subnets privadas. Ele sobreviveu à remoção de uma instância sem erro e escalou sozinho no teste de carga. No fim, desmontamos o que cobra por hora e guardamos o Launch Template, os Security Groups, a AMI e o snapshot `rango-db-final-cap13`. Ficou a promessa: um nome de verdade, HTTPS e o React perto de quem pede comida.
+No capítulo 13, o Rangô passou a rodar atrás do Application Load Balancer `rango-alb`, com um Auto Scaling Group de 2 a 6 instâncias criadas a partir da AMI `rango-api-20261015`, nas subnets privadas. Ele sobreviveu à remoção de uma instância sem erro e escalou sozinho no teste de carga. No fim, desmontamos o que cobra por hora e guardamos o Launch Template, os Security Groups, a AMI e o snapshot `rango-db-final-cap13`. Ficou a promessa: um nome de verdade, HTTPS e o React perto de quem pede comida. Promessa de fim de capítulo costuma ter a mesma confiabilidade de estimativa de sprint, mas esta vai ser cumprida.
 
 ## Um endereço para a TV
 
-Quinta-feira, 15h. A produtora do especial de sábado manda uma mensagem: "Qual endereço a gente coloca na tela?". Você abre o terminal e copia o que tem: `http://rango-alb-1234567890.us-east-1.elb.amazonaws.com`. Ninguém vai digitar isso, e a produtora nem responde.
+Quinta-feira, 15h. A produtora do especial de sábado manda uma mensagem: "Qual endereço a gente coloca na tela?". Você abre o terminal e copia o que tem: `http://rango-alb-1234567890.us-east-1.elb.amazonaws.com`. Ninguém vai digitar isso, e a produtora nem responde. O silêncio dela diz tudo: um endereço com dez dígitos no meio e `elb.amazonaws.com` no fim tem a mesma chance de aparecer na TV que um stack trace num comercial de margarina.
 
-O nome é o problema mais visível. O segundo está no `http://`. Os pedidos, com endereço de entrega, e as presigned URLs das fotos, que funcionam como senha, atravessam a internet em texto puro. Qualquer pessoa no Wi-Fi da praça de alimentação do capítulo 2 consegue ler, e o navegador mostra "não seguro" ao lado do endereço.
+O nome é o problema mais visível. O segundo está no `http://`. Os pedidos, com endereço de entrega, e as presigned URLs das fotos, que funcionam como senha, atravessam a internet em texto puro. Qualquer pessoa no Wi-Fi da praça de alimentação do capítulo 2 consegue ler, e o navegador mostra "não seguro" ao lado do endereço. Para quem está com fome, esse aviso soa como uma placa de "cozinha sem alvará" na porta do restaurante.
 
-O terceiro aparece quando o React sai do seu notebook. A primeira ideia é deixar o Nginx das instâncias servir os arquivos do `npm run build`, como no capítulo 3. Funciona, mas pense na sócia em Recife: cada arquivo vai até a Virgínia e volta. Num teste hipotético, mas com números típicos, a ida e volta (o RTT) entre Recife e `us-east-1` fica entre 120 e 150 milissegundos. Antes do primeiro byte do `index.html`, o navegador gasta uma ida e volta no TCP, outra no TLS 1.3 e mais uma na requisição: quase meio segundo. Depois vem o bundle JavaScript, com algumas centenas de kilobytes. O TCP começa enviando pouco e aumenta aos poucos (o mecanismo se chama *slow start*), e cada aumento custa mais uma ida e volta. Num celular em 4G, a tela branca passa de dois segundos sem que nenhum servidor esteja lento.
+O terceiro aparece quando o React sai do seu notebook. A primeira ideia é deixar o Nginx das instâncias servir os arquivos do `npm run build`, como no capítulo 3. Funciona, mas pense na sócia em Recife: cada arquivo vai até a Virgínia e volta. Num teste hipotético, mas com números típicos, a ida e volta (o RTT) entre Recife e `us-east-1` fica entre 120 e 150 milissegundos. Antes do primeiro byte do `index.html`, o navegador gasta uma ida e volta no TCP, outra no TLS 1.3 e mais uma na requisição: quase meio segundo. Depois vem o bundle JavaScript, com algumas centenas de kilobytes. O TCP começa enviando pouco e aumenta aos poucos (o mecanismo se chama *slow start*), e cada aumento custa mais uma ida e volta. Num celular em 4G, a tela branca passa de dois segundos sem que nenhum servidor esteja lento. O culpado é a física, e a física não aceita ticket de suporte.
 
 E essa carga cairia nas instâncias que atendem `POST /pedidos`, com arquivos iguais para todo mundo que só mudam no deploy, o caso ideal para cache.
 
@@ -18,23 +18,23 @@ O capítulo 2 explicou a teoria de DNS, certificados e CDN. Agora ela vira prát
 
 ### Amazon Route 53
 
-O Amazon Route 53 é o serviço de DNS da AWS. No vocabulário do capítulo 2, ele faz o papel de servidor autoritativo: guarda a zona do `rango.com.br` e responde aos resolvers do mundo inteiro quando alguém pergunta pelo endereço.
+O Amazon Route 53 é o serviço de DNS da AWS. O 53 do nome é a porta do DNS, e o resto lembra uma estrada americana, o que combina com um serviço que passa o dia ensinando caminho para os outros. No vocabulário do capítulo 2, ele faz o papel de servidor autoritativo: guarda a zona do `rango.com.br` e responde aos resolvers do mundo inteiro quando alguém pergunta pelo endereço.
 
-A zona, no Route 53, se chama **hosted zone**. Ao criar uma, a AWS atribui quatro servidores de nome a ela, espalhados por domínios de topo diferentes (algo como `ns-1234.awsdns-26.org` e `ns-567.awsdns-06.net`). Se um desses domínios de topo tiver problemas, os outros continuam respondendo. Esses quatro nomes são os que você entrega ao registrador.
+A zona, no Route 53, se chama **hosted zone**. Ao criar uma, a AWS atribui quatro servidores de nome a ela, espalhados por domínios de topo diferentes (algo como `ns-1234.awsdns-26.org` e `ns-567.awsdns-06.net`). Se um desses domínios de topo tiver problemas, os outros continuam respondendo. É o velho conselho de não pôr todos os ovos na mesma cesta, aplicado a ponto com, ponto net e companhia. Esses quatro nomes são os que você entrega ao registrador.
 
-O domínio continua registrado no Registro.br, como no capítulo 2. O registrador e o provedor de DNS são papéis separados: o Registro.br diz à hierarquia do `.br` quais servidores respondem pelo `rango.com.br`, e o Route 53 dá as respostas. Para trocar de provedor, basta trocar os quatro nomes no painel do registrador.
+O domínio continua registrado no Registro.br, como no capítulo 2. O registrador e o provedor de DNS são papéis separados: o Registro.br diz à hierarquia do `.br` quais servidores respondem pelo `rango.com.br`, e o Route 53 dá as respostas. Para trocar de provedor, basta trocar os quatro nomes no painel do registrador, como quem troca de contador sem precisar mudar de CPF.
 
 Uma hosted zone pode ser pública, visível na internet, ou privada, visível só dentro das VPCs que você associar a ela. A do Rangô é pública.
 
-Os registros são os mesmos do capítulo 2 (A, AAAA, CNAME, MX, TXT), com uma adição que resolve um problema deixado lá atrás: o CNAME é proibido no apex da zona, o nome "pelado" `rango.com.br`. O apex precisa ter os registros SOA e NS, e o CNAME não pode coexistir com nenhum outro registro no mesmo nome. Isso seria contornável se o ALB e o CloudFront tivessem IP fixo, mas eles só têm nome DNS, com IPs que mudam.
+Os registros são os mesmos do capítulo 2 (A, AAAA, CNAME, MX, TXT), com uma adição que resolve um problema deixado lá atrás: o CNAME é proibido no apex da zona, o nome "pelado" `rango.com.br`. O apex precisa ter os registros SOA e NS, e o CNAME não pode coexistir com nenhum outro registro no mesmo nome. O CNAME é ciumento: não divide o nome com ninguém. Isso seria contornável se o ALB e o CloudFront tivessem IP fixo, mas eles só têm nome DNS, com IPs que mudam.
 
 A resposta da AWS é o **registro alias**. Você cria um registro do tipo A (ou AAAA) e, em vez de um IP, aponta para um recurso da AWS: um load balancer, uma distribuição do CloudFront, um bucket configurado como site. Quando um resolver pergunta pelo `rango.com.br`, o Route 53 consulta os IPs atuais do recurso e responde com eles, como se fosse um A comum. Para o mundo de fora, é um registro A. Por dentro, ele se comporta como um CNAME que o próprio Route 53 resolve antes de responder.
 
-Pense numa property do Python. Quem lê `pedido.total` recebe um número, sem saber que por trás existe uma função calculando o valor a cada acesso. O alias é a property do DNS.
+Pense numa property do Python. Quem lê `pedido.total` recebe um número, sem saber que por trás existe uma função calculando o valor a cada acesso. O alias é a property do DNS, com a vantagem de que nenhum colega vai abrir um comentário no PR reclamando de efeito colateral escondido no getter.
 
-O alias tem duas vantagens além de funcionar no apex. Consultas a alias que apontam para recursos da AWS como ELB e CloudFront não são cobradas. E, num alias para load balancer, a opção `EvaluateTargetHealth` faz o Route 53 levar em conta a saúde do alvo, o que importa quando há mais de um destino.
+O alias tem duas vantagens além de funcionar no apex. Consultas a alias que apontam para recursos da AWS como ELB e CloudFront não são cobradas. Num provedor que cobra até pelo ar que a instância respira, "não são cobradas" merece ser lido duas vezes, devagar. E, num alias para load balancer, a opção `EvaluateTargetHealth` faz o Route 53 levar em conta a saúde do alvo, o que importa quando há mais de um destino.
 
-Isso leva aos **health checks** e às **políticas de roteamento**. Verificadores do Route 53 em várias regiões chamam o seu endpoint a cada 30 segundos (ou 10, pagando mais), e ele é considerado saudável quando mais de 18% deles concordam. A política decide a resposta: a simples devolve sempre o mesmo valor; a ponderada divide por pesos, útil para um canary; a de latência escolhe a região mais próxima; a de failover troca para o secundário quando o health check do primário falha. É o DR do capítulo 6 feito no DNS, com o TTL definindo quanto os clientes demoram para perceber a troca.
+Isso leva aos **health checks** e às **políticas de roteamento**. Verificadores do Route 53 em várias regiões chamam o seu endpoint a cada 30 segundos (ou 10, pagando mais), e ele é considerado saudável quando mais de 18% deles concordam. É um quórum menor que o de reunião de condomínio, e mesmo assim decide coisas com mais rapidez. A política decide a resposta: a simples devolve sempre o mesmo valor; a ponderada divide por pesos, útil para um canary; a de latência escolhe a região mais próxima; a de failover troca para o secundário quando o health check do primário falha. É o DR do capítulo 6 feito no DNS, com o TTL definindo quanto os clientes demoram para perceber a troca.
 
 O Rangô tem uma região só e usa a política simples. O health check entra como vigia externo, olhando a API como um cliente veria.
 
@@ -42,37 +42,39 @@ O Rangô tem uma região só e usa a política simples. O health check entra com
 
 O AWS Certificate Manager (ACM) emite certificados TLS públicos e cuida da renovação. Para certificados usados em serviços integrados, como ALB e CloudFront, a emissão não custa nada.
 
-O ACM faz o papel de CA e de Certbot ao mesmo tempo. Você pede um certificado para uma lista de nomes, prova que controla o domínio e recebe um ARN. A chave privada fica guardada na AWS, e você nunca a vê: não há arquivo `.pem` para vazar num commit nem para copiar entre servidores. O certificado é instalado no ALB ou na distribuição pelo ARN.
+O ACM faz o papel de CA e de Certbot ao mesmo tempo. Você pede um certificado para uma lista de nomes, prova que controla o domínio e recebe um ARN. A chave privada fica guardada na AWS, e você nunca a vê: não há arquivo `.pem` para vazar num commit nem para copiar entre servidores. Nem para alguém mandar por e-mail com o assunto "segue a chave, apagar depois de ler", o que sempre acontece com alguém, e nunca é apagado. O certificado é instalado no ALB ou na distribuição pelo ARN.
 
-A prova de posse é a validação DV do capítulo 2. O ACM aceita três métodos: DNS, e-mail e, mais recentemente, HTTP. Use o DNS. O ACM informa um registro CNAME com nomes aleatórios, algo como `_3f1c9a.rango.com.br` apontando para `_8b2e7d.acm-validations.aws.`, e você o cria na zona. Enquanto esse registro existir, o ACM consegue revalidar sozinho e renovar o certificado sem ninguém fazer nada. A validação por HTTP não aceita certificados curinga, e a por e-mail depende de alguém clicar num link a cada renovação.
+A prova de posse é a validação DV do capítulo 2. O ACM aceita três métodos: DNS, e-mail e, mais recentemente, HTTP. A escolha certa é o DNS. O ACM informa um registro CNAME com nomes aleatórios, algo como `_3f1c9a.rango.com.br` apontando para `_8b2e7d.acm-validations.aws.`, e você o cria na zona. Enquanto esse registro existir, o ACM consegue revalidar sozinho e renovar o certificado sem ninguém fazer nada. A validação por HTTP não aceita certificados curinga, e a por e-mail depende de alguém clicar num link a cada renovação. Numa caixa de entrada com quatro mil e-mails não lidos, isso é menos um processo e mais um bilhete de loteria.
 
-As regras de validade mudaram em 2026, seguindo o calendário do CA/Browser Forum do capítulo 2: a partir de 15 de março, no máximo 200 dias. Desde fevereiro de 2026, o ACM emite e renova certificados públicos com 198 dias, em vez de 395; os antigos valem até a próxima renovação. A renovação começa 45 dias antes do vencimento, mais ou menos a cada cinco meses. Com renovação automática, ninguém percebe a mudança.
+As regras de validade mudaram em 2026, seguindo o calendário do CA/Browser Forum do capítulo 2: a partir de 15 de março, no máximo 200 dias. Desde fevereiro de 2026, o ACM emite e renova certificados públicos com 198 dias, em vez de 395; os antigos valem até a próxima renovação. A renovação começa 45 dias antes do vencimento, mais ou menos a cada cinco meses. Com renovação automática, ninguém percebe a mudança. Sem ela, alguém perceberia, provavelmente num domingo à noite.
 
-Há uma regra que surpreende todo mundo uma vez: o CloudFront só aceita certificados do ACM emitidos na região `us-east-1`, seja qual for a região da sua aplicação. O CloudFront é global, e a configuração dele vive na Virgínia. Se a API do Rangô estivesse em `sa-east-1`, você precisaria de dois certificados: um em São Paulo para o ALB e outro em `us-east-1` para o CloudFront. Como tudo do Rangô está em `us-east-1`, um único certificado com `rango.com.br`, `www.rango.com.br` e `api.rango.com.br` serve aos dois. Esse é um dos motivos que o capítulo 7 listou para começar pela Virgínia.
+Há uma regra que surpreende todo mundo uma vez (e algumas pessoas, duas): o CloudFront só aceita certificados do ACM emitidos na região `us-east-1`, seja qual for a região da sua aplicação. O CloudFront é global, e a configuração dele vive na Virgínia. Na AWS, todos os caminhos, cedo ou tarde, passam pela Virgínia. Se a API do Rangô estivesse em `sa-east-1`, você precisaria de dois certificados: um em São Paulo para o ALB e outro em `us-east-1` para o CloudFront. Como tudo do Rangô está em `us-east-1`, um único certificado com `rango.com.br`, `www.rango.com.br` e `api.rango.com.br` serve aos dois. Esse é um dos motivos que o capítulo 7 listou para começar pela Virgínia.
 
 ### Amazon CloudFront
 
-O Amazon CloudFront é a CDN da AWS, com centenas de pontos de presença pelo mundo, vários deles no Brasil. O que o capítulo 2 chamou de borda, a AWS chama de *edge location*.
+O Amazon CloudFront é a CDN da AWS, com centenas de pontos de presença pelo mundo, vários deles no Brasil. O que o capítulo 2 chamou de borda, a AWS chama de *edge location*, que é a mesma coisa, só que soa bem mais caro.
 
 A unidade de configuração é a **distribuição**. Ela recebe um nome como `d1a2b3c4d5e6f7.cloudfront.net`, aceita nomes alternativos (os seus domínios, com o certificado do ACM) e liga um ou mais comportamentos de cache a uma ou mais origens. Uma origem pode ser um bucket S3, um load balancer ou qualquer servidor HTTP. Um comportamento diz que caminhos ele atende (`/assets/*`, por exemplo), qual política de cache usar e o que fazer com HTTP sem criptografia.
 
 Para o React, a origem natural é um bucket S3. O build do Vite gera um `index.html` e uma pasta `assets/` com arquivos cujo nome carrega um hash do conteúdo. São arquivos estáticos, e o S3 do capítulo 11 guarda arquivos estáticos por centavos. O CloudFront fica na frente: a sócia em Recife fala com uma borda no Brasil, a dezenas de milissegundos ou menos, e só a primeira requisição de cada arquivo em cada borda vai até o bucket na Virgínia. As seguintes saem do cache da borda. O handshake TLS também acontece na borda, perto dela.
 
-Falta um detalhe de segurança. O bucket precisa ficar privado, com o Block Public Access do capítulo 11 ligado, e mesmo assim entregar arquivos ao CloudFront. A peça que resolve isso se chama **Origin Access Control (OAC)**. A distribuição assina cada requisição ao S3 com SigV4, a mesma assinatura que a AWS CLI usa, e a bucket policy libera `s3:GetObject` para o serviço `cloudfront.amazonaws.com`, com uma condição: o ARN de origem precisa ser o da sua distribuição. Qualquer outra distribuição, de qualquer outra conta, recebe `403`. Quem tentar o endereço direto do bucket também.
+Falta um detalhe de segurança. O bucket precisa ficar privado, com o Block Public Access do capítulo 11 ligado, e mesmo assim entregar arquivos ao CloudFront. A peça que resolve isso se chama **Origin Access Control (OAC)**. A distribuição assina cada requisição ao S3 com SigV4, a mesma assinatura que a AWS CLI usa, e a bucket policy libera `s3:GetObject` para o serviço `cloudfront.amazonaws.com`, com uma condição: o ARN de origem precisa ser o da sua distribuição. Qualquer outra distribuição, de qualquer outra conta, recebe `403`. Quem tentar o endereço direto do bucket também. É festa com lista de convidados e conferência de documento na entrada.
 
-Tutoriais antigos usam OAI, o mecanismo anterior, que a AWS mantém como legado, ou o *static website hosting* do S3 com bucket público. O OAC só funciona com o endpoint REST do bucket (`bucket.s3.us-east-1.amazonaws.com`), e o bucket público é o que o capítulo 11 ensinou a evitar.
+Tutoriais antigos usam OAI, o mecanismo anterior, que a AWS mantém como legado, ou o *static website hosting* do S3 com bucket público. O OAC só funciona com o endpoint REST do bucket (`bucket.s3.us-east-1.amazonaws.com`), e o bucket público é o que o capítulo 11 ensinou a evitar. A internet está cheia de tutorial de 2019 com cinco estrelas, milhares de curtidas e um bucket aberto para o mundo.
 
-Sobre custo, o CloudFront tem hoje dois modelos. No pay-as-you-go, você paga por GB entregue e por requisição, com uma franquia mensal permanente de 1 TB de saída e 10 milhões de requisições. Uma distribuição parada não cobra nada. Existem também planos de preço fixo (Free, Pro, Business, Premium), sem cobrança de excedente, cada um cobrindo uma distribuição e um domínio apex, com WAF, DNS e certificado incluídos. O Free custa zero, com 1 milhão de requisições e 100 GB por mês. Os comandos deste capítulo usam o pay-as-you-go, que no volume do Rangô também não deve gerar cobrança. Preços e franquias de referência, `us-east-1`, consultados em outubro de 2026; confira a página oficial antes de decidir.
+Sobre custo, o CloudFront tem hoje dois modelos. No pay-as-you-go, você paga por GB entregue e por requisição, com uma franquia mensal permanente de 1 TB de saída e 10 milhões de requisições. Uma distribuição parada não cobra nada. Existem também planos de preço fixo (Free, Pro, Business, Premium, nomes dignos de cartão de crédito), sem cobrança de excedente, cada um cobrindo uma distribuição e um domínio apex, com WAF, DNS e certificado incluídos. O Free custa zero, com 1 milhão de requisições e 100 GB por mês. Os comandos deste capítulo usam o pay-as-you-go, que no volume do Rangô também não deve gerar cobrança. Preços e franquias de referência, `us-east-1`, consultados em outubro de 2026; confira a página oficial antes de decidir.
 
-## Mão na massa: rango.com.br no ar
+## Na prática: rango.com.br no ar
 
-Pré-requisitos: tudo o que o capítulo 13 deixou (Launch Template `rango-api`, AMI `rango-api-20261015`, Security Groups `rango-web`, `rango-alb`, `rango-db` e `rango-cache`, snapshot `rango-db-final-cap13`, role `rango-ec2`, bucket `rango-fotos-pratos-<conta>`), o profile `rango-dev`, e o domínio `rango.com.br` registrado no Registro.br com acesso ao painel. Use o seu próprio domínio no lugar do `rango.com.br` em todos os comandos. Para o build do front, Node.js e o repositório do Rangô.
+Os comandos e as saídas estão todos aqui, então dá para acompanhar a história inteira só lendo, sem gastar nem os US$ 0,50 da hosted zone.
 
-Sobre custo: a hosted zone cobra US$ 0,50 por mês, e o mês começa a contar na criação. O banco, o cache, o ALB e as instâncias voltam a cobrar por hora até a seção "Desmontar".
+Pré-requisitos: tudo o que o capítulo 13 deixou (Launch Template `rango-api`, AMI `rango-api-20261015`, Security Groups `rango-web`, `rango-alb`, `rango-db` e `rango-cache`, snapshot `rango-db-final-cap13`, role `rango-ec2`, bucket `rango-fotos-pratos-<conta>`), o profile `rango-dev`, e o domínio `rango.com.br` registrado no Registro.br com acesso ao painel. Numa conta de verdade, o seu próprio domínio entra no lugar do `rango.com.br` em todos os comandos. Para o build do front, Node.js e o repositório do Rangô.
+
+Sobre custo: a hosted zone cobra US$ 0,50 por mês, e o mês começa a contar na criação. O banco, o cache, o ALB e as instâncias voltam a cobrar por hora até a seção "A desmontagem". O taxímetro liga agora.
 
 ### A zona e a delegação
 
-Comece pela zona, porque a delegação pode levar algum tempo para valer e o certificado depende dela:
+O começo é pela zona, porque a delegação pode levar algum tempo para valer e o certificado depende dela:
 
 ```bash
 export AWS_PROFILE=rango-dev
@@ -93,11 +95,11 @@ aws route53 get-hosted-zone --id "$ZONE_ID" \
 ns-1234.awsdns-26.org  ns-567.awsdns-06.net  ns-1890.awsdns-44.co.uk  ns-89.awsdns-11.com
 ```
 
-O ID volta no formato `/hostedzone/Z0123456789ABCDEFGHIJ`, e o `${ZONE_ID##*/}` corta tudo até a última barra. O `--caller-reference` precisa ser único a cada chamada: ele impede que uma retentativa da CLI crie duas zonas iguais. É o `Idempotency-Key` do capítulo 5, do lado da AWS.
+O ID volta no formato `/hostedzone/Z0123456789ABCDEFGHIJ`, e o `${ZONE_ID##*/}` corta tudo até a última barra. O `--caller-reference` precisa ser único a cada chamada: ele impede que uma retentativa da CLI crie duas zonas iguais. É o `Idempotency-Key` do capítulo 5, do lado da AWS. O `date +%s` garante a unicidade com o método mais antigo da computação: torcer para que ninguém rode duas vezes no mesmo segundo.
 
-A zona nasce com dois registros: o SOA e o NS com os quatro servidores. Os seus quatro nomes vão ser outros. Copie-os para o painel do Registro.br, na tela de servidores DNS do domínio. O Registro.br costuma conferir se os servidores informados respondem pela zona antes de aceitar a troca, e como a zona já existe no Route 53, a conferência passa.
+A zona nasce com dois registros: o SOA e o NS com os quatro servidores. Os seus quatro nomes vão ser outros. Eles vão para o painel do Registro.br, na tela de servidores DNS do domínio. O Registro.br costuma conferir se os servidores informados respondem pela zona antes de aceitar a troca, e como a zona já existe no Route 53, a conferência passa.
 
-Teste direto num servidor do `.br`, que mostra a delegação sem passar por nenhum cache:
+O teste vai direto num servidor do `.br`, que mostra a delegação sem passar por nenhum cache:
 
 ```bash
 dig @a.dns.br rango.com.br NS +norec
@@ -110,11 +112,11 @@ rango.com.br.		3600	IN	NS	ns-567.awsdns-06.net.
 ...
 ```
 
-Quando os quatro nomes da AWS aparecerem, a hierarquia já manda as perguntas para o Route 53. Os resolvers que guardaram a delegação antiga só vão perceber quando o TTL deles vencer, o fenômeno que o capítulo 2 explicou como "propagação".
+Quando os quatro nomes da AWS aparecerem, a hierarquia já manda as perguntas para o Route 53. Os resolvers que guardaram a delegação antiga só vão perceber quando o TTL deles vencer, o fenômeno que o capítulo 2 explicou como "propagação". É a palavra mágica do suporte de hospedagem: "aguarde a propagação, até 48 horas" resolve qualquer chamado, inclusive os que não têm nada a ver com DNS.
 
 ### O certificado
 
-Peça o certificado em `us-east-1`, com os três nomes:
+O certificado é pedido em `us-east-1`, com os três nomes:
 
 ```bash
 CERT_ARN=$(aws acm request-certificate \
@@ -128,7 +130,7 @@ CERT_ARN=$(aws acm request-certificate \
 
 Os três nomes viram SANs do mesmo certificado, com chave RSA 2048, o padrão do ACM.
 
-Espere uns dez segundos e crie os registros de validação. Uma função pequena evita repetir o JSON de mudança do Route 53 a cada registro:
+Uns dez segundos depois, chega a vez dos registros de validação. Uma função pequena evita repetir o JSON de mudança do Route 53 a cada registro. A quantidade de barras invertidas denuncia JSON dentro de string de shell, a boneca russa da tipografia:
 
 ```bash
 upsert() {
@@ -147,15 +149,15 @@ done
 aws acm wait certificate-validated --certificate-arn "$CERT_ARN"
 ```
 
-O `UPSERT` cria o registro ou o substitui se já existir, e torna o comando seguro para rodar de novo. Cada chamada responde `PENDING` e, segundos depois, a mudança está em todos os servidores do Route 53. O `wait` consulta o ACM a cada minuto até o status virar `ISSUED`, o que costuma levar poucos minutos depois que a delegação valeu. Se ele estourar o tempo, confira o `dig` da seção anterior: o ACM pergunta pela internet, e sem delegação ele não encontra os registros.
+O `UPSERT` cria o registro ou o substitui se já existir, e torna o comando seguro para rodar de novo. Cada chamada responde `PENDING` e, segundos depois, a mudança está em todos os servidores do Route 53. O `wait` consulta o ACM a cada minuto até o status virar `ISSUED`, o que costuma levar poucos minutos depois que a delegação valeu. Se ele estourar o tempo, a suspeita recai sobre a delegação, e o `dig` da seção anterior tira a dúvida: o ACM pergunta pela internet, e sem delegação ele não encontra os registros.
 
-Não apague esses três CNAMEs nunca. Eles são a autorização permanente para as renovações.
+Não apague esses três CNAMEs nunca. Eles são a autorização permanente para as renovações. Têm toda a cara de lixo esquecido por um teste antigo, e é exatamente por isso que alguém, um dia, vai querer apagá-los.
 
 ### A API de volta, com configuração nova
 
-Recrie o banco e o cache com os comandos de "Banco e cache de volta", do capítulo 13, trocando o snapshot por `rango-db-final-cap13`. Recupere também as variáveis `VPC_ID`, `PUB_A`, `PUB_B`, `PRIV_A`, `PRIV_B`, `SG_WEB` e `SG_ALB` com as funções `id_subnet` e `id_sg` de lá.
+O banco e o cache voltam com os comandos de "Banco e cache de volta", do capítulo 13, trocando o snapshot por `rango-db-final-cap13`. As variáveis `VPC_ID`, `PUB_A`, `PUB_B`, `PRIV_A`, `PRIV_B`, `SG_WEB` e `SG_ALB` também são recuperadas com as funções `id_subnet` e `id_sg` de lá.
 
-Existe um problema escondido aqui. A AMI carrega o `/etc/rango/api.env` do dia em que foi criada, com o endpoint do cache daquele dia. O cache serverless ganha endpoint novo a cada criação, e as instâncias novas tentariam falar com um cache que não existe mais. E o `CORS_ORIGINS` ainda aponta para `http://localhost:5173`, então o React em `https://rango.com.br` seria barrado pelo navegador.
+Existe um problema escondido aqui. A AMI carrega o `/etc/rango/api.env` do dia em que foi criada, com o endpoint do cache daquele dia. O cache serverless ganha endpoint novo a cada criação, e as instâncias novas tentariam falar com um cache que não existe mais, como quem liga para o número antigo de um amigo e cai numa pizzaria. E o `CORS_ORIGINS` ainda aponta para `http://localhost:5173`, então o React em `https://rango.com.br` seria barrado pelo navegador.
 
 Em vez de gerar outra AMI, o remendo é um user data curto numa versão nova do Launch Template, que ajusta as duas linhas no primeiro boot. Nenhum dos valores é segredo:
 
@@ -183,11 +185,11 @@ aws ec2 create-launch-template-version \
 aws ec2 modify-launch-template --launch-template-name rango-api --default-version 2
 ```
 
-O `--source-version 1` copia a versão anterior e acrescenta o user data. No macOS, troque o `base64 -w0` por `base64 -i`. O `CORS_ORIGINS` aceita uma lista separada por vírgula, porque o `main.py` faz `split(",")` desde o capítulo 3. Como o ASG do capítulo 13 usa `$Default`, as instâncias que ele criar a partir de agora já nascem com a versão 2.
+O `--source-version 1` copia a versão anterior e acrescenta o user data. No macOS, o `base64 -w0` vira `base64 -i`. O `CORS_ORIGINS` aceita uma lista separada por vírgula, porque o `main.py` faz `split(",")` desde o capítulo 3. Como o ASG do capítulo 13 usa `$Default`, as instâncias que ele criar a partir de agora já nascem com a versão 2.
 
-O capítulo 16 troca esse remendo por algo melhor: a instância vai buscar a configuração e a senha no Parameter Store a cada boot, e a AMI deixa de carregar o `api.env`.
+O capítulo 16 troca esse remendo por algo melhor: a instância vai buscar a configuração e a senha no Parameter Store a cada boot, e a AMI deixa de carregar o `api.env`. Remendo com data marcada para sair é a forma mais honesta de gambiarra que existe.
 
-Agora recrie o target group, o ALB e o ASG com os comandos do capítulo 13, com uma diferença: pule o `create-listener` da porta 80. O ALB ganha dois listeners novos. Antes, abra a porta 443 no grupo do balanceador:
+Em seguida, o target group, o ALB e o ASG voltam com os comandos do capítulo 13, com uma diferença: o `create-listener` da porta 80 fica de fora. O ALB ganha dois listeners novos. Antes deles, a porta 443 precisa estar aberta no grupo do balanceador:
 
 ```bash
 aws ec2 authorize-security-group-ingress --group-id "$SG_ALB" \
@@ -204,9 +206,9 @@ aws elbv2 create-listener --load-balancer-arn "$ALB_ARN" \
   --default-actions 'Type=redirect,RedirectConfig={Protocol=HTTPS,Port=443,StatusCode=HTTP_301}'
 ```
 
-O listener HTTPS termina o TLS no ALB, como o Nginx do capítulo 3, e repassa às instâncias em HTTP pela rede privada. A *security policy* escolhida aceita só TLS 1.3 e 1.2. A porta 80 responde com um `301` para o HTTPS, sem incomodar as instâncias.
+O listener HTTPS termina o TLS no ALB, como o Nginx do capítulo 3, e repassa às instâncias em HTTP pela rede privada. A *security policy* escolhida aceita só TLS 1.3 e 1.2. A porta 80 responde com um `301` para o HTTPS, sem incomodar as instâncias, como a recepcionista que aponta a entrada certa sem precisar chamar o gerente.
 
-Com o ASG de volta, recrie também as ações `especial-tv-inicio` e `especial-tv-fim`, com o cálculo do próximo sábado de "Agendado para sábado", no capítulo 13. O `--force-delete` de lá levou as duas junto com o grupo.
+Com o ASG de volta, as ações `especial-tv-inicio` e `especial-tv-fim` também precisam ser recriadas, com o cálculo do próximo sábado de "Agendado para sábado", no capítulo 13. O `--force-delete` de lá levou as duas junto com o grupo.
 
 ### api.rango.com.br
 
@@ -220,7 +222,7 @@ read -r ALB_DNS ALB_ZONE <<< "$(aws elbv2 describe-load-balancers \
 upsert "{\"Name\":\"api.rango.com.br\",\"Type\":\"A\",\"AliasTarget\":{\"HostedZoneId\":\"$ALB_ZONE\",\"DNSName\":\"$ALB_DNS\",\"EvaluateTargetHealth\":true}}"
 ```
 
-Repare que não há TTL: no alias, quem decide é o recurso de destino. Teste:
+Não há TTL: no alias, quem decide é o recurso de destino. Os testes mostram o resultado:
 
 ```bash
 dig +short api.rango.com.br
@@ -239,7 +241,7 @@ Location: https://api.rango.com.br:443/health
 [{"id":"cantina-da-nona","nome":"Cantina da Nona","taxa_entrega":6.9,"taxa_entrega_fmt":"R$ 6,90"},...]
 ```
 
-Dois IPs, um por nó do ALB. O `http://` foi redirecionado pelo próprio balanceador, e o `https://` respondeu com o certificado do ACM. Confira a cadeia com o `openssl` do capítulo 2:
+Dois IPs, um por nó do ALB. Amanhã podem ser outros dois, e o alias nem pisca. O `http://` foi redirecionado pelo próprio balanceador, e o `https://` respondeu com o certificado do ACM. O `openssl` do capítulo 2 confere a cadeia:
 
 ```bash
 openssl s_client -connect api.rango.com.br:443 -servername api.rango.com.br </dev/null 2>/dev/null \
@@ -252,19 +254,19 @@ issuer=C=US, O=Amazon, CN=Amazon RSA 2048 M02
 notAfter=May  1 23:59:59 2027 GMT
 ```
 
-O emissor é uma CA intermediária da Amazon (o nome exato pode variar), e o vencimento fica a 198 dias de hoje.
+O emissor é uma CA intermediária da Amazon (o nome exato pode variar), e o vencimento fica a 198 dias de hoje. Tempo de sobra para esquecer completamente que ele existe, que é justamente a ideia.
 
 ### O React num bucket privado
 
-O front precisa saber onde a API mora. O Vite lê variáveis de arquivos `.env` por modo, e o `npm run build` roda no modo `production`. Crie `frontend/.env.production`:
+O front precisa saber onde a API mora. O Vite lê variáveis de arquivos `.env` por modo, e o `npm run build` roda no modo `production`. O arquivo que resolve é o `frontend/.env.production`:
 
 ```bash
 VITE_API_URL=https://api.rango.com.br
 ```
 
-Esse arquivo pode ir para o git, porque toda variável `VITE_` acaba dentro do bundle, legível no DevTools: segredo nenhum entra aqui. Ele tem prioridade sobre o `.env.local` só no build, e o desenvolvimento continua apontando para o Compose.
+Esse arquivo pode ir para o git, porque toda variável `VITE_` acaba dentro do bundle, legível no DevTools: segredo nenhum entra aqui. Tudo o que vai para o navegador deve ser tratado como se estivesse escrito num outdoor na avenida principal. Ele tem prioridade sobre o `.env.local` só no build, e o desenvolvimento continua apontando para o Compose.
 
-Crie o bucket. Buckets novos já nascem com Block Public Access ligado e com o Object Ownership em `BucketOwnerEnforced`, que o OAC exige:
+Depois vem o bucket. Buckets novos já nascem com Block Public Access ligado e com o Object Ownership em `BucketOwnerEnforced`, que o OAC exige:
 
 ```bash
 CONTA=$(aws sts get-caller-identity --query Account --output text)
@@ -275,7 +277,7 @@ aws s3api put-bucket-tagging --bucket "$FRONT" \
   --tagging 'TagSet=[{Key=Projeto,Value=rango}]'
 ```
 
-Gere o build e envie. A ordem e os cabeçalhos importam:
+Em seguida, o build e o envio. A ordem e os cabeçalhos importam:
 
 ```bash
 cd frontend
@@ -291,13 +293,13 @@ aws s3 cp dist/index.html "s3://$FRONT/index.html" \
 cd ..
 ```
 
-Os arquivos de `assets/` têm o hash no nome, como `index-BxQ3k9aZ.js`. Se o conteúdo muda, o nome muda, e por isso eles podem ficar um ano em qualquer cache. O `index.html` tem sempre o mesmo nome e aponta para os hashes da versão atual, então ele vai com `no-cache`: o navegador pode guardá-lo, mas precisa perguntar se mudou antes de usar. É a regra de `Cache-Control` do capítulo 2.
+Os arquivos de `assets/` têm o hash no nome, como `index-BxQ3k9aZ.js`. Se o conteúdo muda, o nome muda, e por isso eles podem ficar um ano em qualquer cache. O `index.html` tem sempre o mesmo nome e aponta para os hashes da versão atual, então ele vai com `no-cache`: o navegador pode guardá-lo, mas precisa perguntar se mudou antes de usar, como quem cheira o leite antes de colocar no café. É a regra de `Cache-Control` do capítulo 2.
 
 Os assets sobem primeiro. Se o `index.html` novo chegasse antes, um usuário poderia receber uma página apontando para um JavaScript que ainda não existe no bucket. E o `sync` vai sem `--delete` de propósito: os arquivos da versão anterior ficam no bucket, e quem está com a aba aberta desde ontem continua conseguindo carregar os pedaços da versão antiga. A seção de armadilhas mostra o que acontece sem isso.
 
 ### A distribuição
 
-Crie o OAC. Ele é só uma configuração de assinatura, reaproveitável por várias distribuições:
+Primeiro vem o OAC. Ele é só uma configuração de assinatura, reaproveitável por várias distribuições:
 
 ```bash
 OAC_ID=$(aws cloudfront create-origin-access-control \
@@ -306,7 +308,7 @@ OAC_ID=$(aws cloudfront create-origin-access-control \
   --query "OriginAccessControl.Id" --output text)
 ```
 
-A configuração da distribuição é um JSON grande. Salve como `infra/cloudfront/rango-front.json`, gerado a partir das variáveis:
+A configuração da distribuição é um JSON grande, do tipo que faz qualquer pessoa sentir saudade do YAML por uns três segundos. Ela fica em `infra/cloudfront/rango-front.json`, gerado a partir das variáveis:
 
 ```bash
 mkdir -p infra/cloudfront
@@ -356,7 +358,7 @@ echo "$DIST_ID $DIST_DNS"
 E1ABCDEF2GHIJK d1a2b3c4d5e6f7.cloudfront.net
 ```
 
-Vale passar pelas linhas menos óbvias. O `S3OriginConfig` com `OriginAccessIdentity` vazio é obrigatório na API mesmo quando você usa OAC, porque o campo é do mecanismo antigo. O `CachePolicyId` é o da política gerenciada `CachingOptimized`, que respeita o `Cache-Control` do objeto dentro de limites de 1 segundo a 1 ano e não inclui cookies nem query strings na chave de cache. O `sni-only` usa o SNI do capítulo 2 para escolher o certificado. O `PriceClass_All` inclui as bordas da América do Sul, e a seção de armadilhas explica por que isso pesa para o Rangô.
+Vale passar pelas linhas menos óbvias. O `S3OriginConfig` com `OriginAccessIdentity` vazio é obrigatório na API mesmo quando você usa OAC, porque o campo é do mecanismo antigo. É o campo "número do fax" de formulário de cadastro: ninguém usa, mas sem ele o formulário não passa. O `CachePolicyId` é o da política gerenciada `CachingOptimized`, que respeita o `Cache-Control` do objeto dentro de limites de 1 segundo a 1 ano e não inclui cookies nem query strings na chave de cache. O `sni-only` usa o SNI do capítulo 2 para escolher o certificado. O `PriceClass_All` (o nome soa como passagem de classe executiva, e o que entrega é a lista completa de bordas) inclui as bordas da América do Sul, e a seção de armadilhas explica por que isso pesa para o Rangô.
 
 O `CustomErrorResponses` é o equivalente do `try_files` do Nginx do capítulo 3. Uma SPA tem rotas que só existem no React: quando o Rangô ganhar o React Router, um link direto para `https://rango.com.br/pedidos/6f1c2a9e` vai pedir ao bucket um objeto chamado `pedidos/6f1c2a9e`, que não existe. O OAC só libera `s3:GetObject`, sem `s3:ListBucket`, e nessas condições o S3 responde `403` para uma chave inexistente, para não revelar o que existe ou não no bucket. Sem o mapeamento, o usuário veria isto:
 
@@ -365,9 +367,11 @@ O `CustomErrorResponses` é o equivalente do `try_files` do Nginx do capítulo 3
 <Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>
 ```
 
+Uma mensagem de erro em XML, a esta altura do século, é o tipo de coisa que faz o cliente fechar a aba e pedir pizza pelo telefone.
+
 Com o mapeamento, o CloudFront troca o `403` e o `404` pelo `index.html` com status `200`, e o React lê a URL e desenha a tela certa.
 
-Agora a bucket policy, que libera a leitura só para essa distribuição. Salve como `infra/s3/rango-front-policy.json`:
+Agora a bucket policy, que libera a leitura só para essa distribuição. Ela fica em `infra/s3/rango-front-policy.json`:
 
 ```bash
 cat > infra/s3/rango-front-policy.json <<EOF
@@ -394,11 +398,11 @@ aws s3api put-bucket-policy --bucket "$FRONT" \
 aws cloudfront wait distribution-deployed --id "$DIST_ID"
 ```
 
-O Block Public Access aceita essa policy, porque o principal é um serviço com condição sobre um ARN específico. O ARN da distribuição não tem região. O `wait` leva alguns minutos, até a configuração chegar a todas as bordas.
+O Block Public Access aceita essa policy, porque o principal é um serviço com condição sobre um ARN específico. O ARN da distribuição não tem região. O `wait` leva alguns minutos, até a configuração chegar a todas as bordas. É o intervalo perfeito para ir buscar um café e descobrir que o café acabou.
 
 ### O apex, e um erro de propósito
 
-Falta apontar `rango.com.br` para a distribuição. O reflexo de quem conhece DNS é criar um CNAME. Veja o que o Route 53 diz:
+Falta apontar `rango.com.br` para a distribuição. O reflexo de quem conhece DNS é criar um CNAME. O Route 53, que também conhece DNS, tem outra opinião:
 
 ```bash
 upsert "{\"Name\":\"rango.com.br\",\"Type\":\"CNAME\",\"TTL\":300,\"ResourceRecords\":[{\"Value\":\"$DIST_DNS\"}]}"
@@ -409,7 +413,7 @@ An error occurred (InvalidChangeBatch) when calling the ChangeResourceRecordSets
 [RRSet of type CNAME with DNS name rango.com.br. is not permitted at apex in zone rango.com.br.]
 ```
 
-É a regra do capítulo 2, aplicada pelo próprio Route 53. Use alias, em A e em AAAA, já que a distribuição tem IPv6 ligado. O `HostedZoneId` de um alias para CloudFront é sempre o mesmo, `Z2FDTNDATAQYW2`, em qualquer conta:
+É a regra do capítulo 2, aplicada pelo próprio Route 53. A saída é o alias, em A e em AAAA, já que a distribuição tem IPv6 ligado. O `HostedZoneId` de um alias para CloudFront é sempre o mesmo, `Z2FDTNDATAQYW2`, em qualquer conta. É o único ID da AWS que vale a pena decorar, e mesmo assim ninguém decora:
 
 ```bash
 for NOME in rango.com.br www.rango.com.br; do
@@ -421,7 +425,7 @@ done
 
 O `www` poderia ser um CNAME comum, porque não fica no apex. Com alias, as consultas a ele também saem de graça.
 
-Teste o caminho todo. Primeiro o `index.html`, depois o mesmo arquivo de assets duas vezes (troque pelo nome que o seu build gerou):
+O teste do caminho todo pede primeiro o `index.html`, depois o mesmo arquivo de assets duas vezes (o nome do arquivo muda a cada build):
 
 ```bash
 curl -sI https://rango.com.br/ | grep -iE "^(http|cache-control|x-cache|x-amz-cf-pop)"
@@ -442,11 +446,11 @@ x-cache: Hit from cloudfront
 x-amz-cf-pop: GRU3-P2
 ```
 
-O `x-amz-cf-pop` mostra a borda que atendeu, pelo código do aeroporto: `GRU` é Guarulhos, em São Paulo. Do Recife, você pode ver outra. O primeiro pedido do JavaScript foi um *miss* e buscou no bucket da Virgínia; o segundo saiu do cache da borda. Só o primeiro visitante de cada borda paga a viagem até `us-east-1`.
+O `x-amz-cf-pop` mostra a borda que atendeu, pelo código do aeroporto: `GRU` é Guarulhos, em São Paulo. Pela primeira vez na história, alguma coisa saiu de Guarulhos e chegou ao destino em poucos milissegundos. Do Recife, a borda pode ser outra. O primeiro pedido do JavaScript foi um *miss* e buscou no bucket da Virgínia; o segundo saiu do cache da borda. Só o primeiro visitante de cada borda paga a viagem até `us-east-1`.
 
-Abra `https://rango.com.br` no navegador. O cadeado aparece, a lista de restaurantes vem de `https://api.rango.com.br`, e o console do DevTools não mostra erro de CORS, porque o `api.env` das instâncias já aceita a origem nova.
+No navegador, `https://rango.com.br` abre com o cadeado, a lista de restaurantes vem de `https://api.rango.com.br`, e o console do DevTools não mostra erro de CORS, porque o `api.env` das instâncias já aceita a origem nova. Um console do DevTools sem nada vermelho é uma visão tão rara que merecia print e moldura.
 
-Teste também o endereço direto do bucket, o que precisa falhar:
+Já o endereço direto do bucket precisa falhar, e falha. Poucas vezes um `403` trouxe tanta alegria:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" "https://$FRONT.s3.us-east-1.amazonaws.com/index.html"
@@ -466,7 +470,7 @@ Os primeiros 1.000 caminhos invalidados por mês são gratuitos. O capítulo 18 
 
 ### As fotos e o domínio novo
 
-O capítulo 11 deixou o CORS do bucket de fotos aceitando só `https://rango.test:5173`, e o upload direto do navegador agora parte de `https://rango.com.br`. Atualize `infra/s3/rango-fotos-cors.json`:
+O capítulo 11 deixou o CORS do bucket de fotos aceitando só `https://rango.test:5173`, e o upload direto do navegador agora parte de `https://rango.com.br`. A atualização vai em `infra/s3/rango-fotos-cors.json`:
 
 ```json
 {
@@ -490,11 +494,11 @@ aws s3api put-bucket-cors --bucket "rango-fotos-pratos-$CONTA" \
   --cors-configuration file://infra/s3/rango-fotos-cors.json
 ```
 
-As fotos continuam sendo exibidas por presigned URLs de leitura, direto do S3. Servi-las pelo CloudFront exigiria trocar essas URLs por URLs assinadas do CloudFront, e fica para quando o volume justificar.
+As fotos continuam sendo exibidas por presigned URLs de leitura, direto do S3. Servi-las pelo CloudFront exigiria trocar essas URLs por URLs assinadas do CloudFront, e fica para quando o volume justificar, uma frase que todo projeto tem escrita em algum lugar e que quase ninguém volta para ler.
 
 ### Um vigia do lado de fora
 
-O ALB e o ASG cuidam das instâncias, mas não sabem se o Rangô está acessível para quem está fora da AWS. Um health check do Route 53 testa o mesmo caminho que o cliente:
+O ALB e o ASG cuidam das instâncias, mas não sabem se o Rangô está acessível para quem está fora da AWS. Elogio do chef à própria comida vale pouco; o que conta é a opinião de quem está na mesa. Um health check do Route 53 testa o mesmo caminho que o cliente:
 
 ```bash
 HC_ID=$(aws route53 create-health-check \
@@ -525,11 +529,11 @@ Um health check com HTTPS para endpoint na AWS custa US$ 1,00 por mês, mas a p�
 
 ### Sábado, 21h
 
-Na quinta à noite, a produtora recebe a resposta: `rango.com.br`. No sábado, às 20h30, a ação agendada sobe o mínimo para 4, e as duas instâncias novas já estão saudáveis no target group quando o programa começa. Às 21h12, a Cantina da Nona aparece na tela com o endereço embaixo. Em três minutos, o ALB passa de 900 para 7.600 requisições por minuto, e a target tracking leva o grupo ao máximo de 6. O pico fica em 7.800 por minuto, umas 1.300 por instância, abaixo das 1.400 que cada uma aguenta pela conta do capítulo 13. O front quase não pesa nessa conta: o CloudFront entrega o `index.html` e o bundle pela borda de São Paulo, com 97% de acerto no cache. Até a meia-noite, são 1.140 pedidos, sem nenhum `502` no ALB e sem nenhum `too many clients` no banco. À 0h30, a ação `especial-tv-fim` devolve o mínimo a 2, e a política remove o excesso ao longo da madrugada.
+Na quinta à noite, a produtora recebe a resposta: `rango.com.br`. No sábado, às 20h30, a ação agendada sobe o mínimo para 4, e as duas instâncias novas já estão saudáveis no target group quando o programa começa. Às 21h12, a Cantina da Nona aparece na tela com o endereço embaixo. Em três minutos, o ALB passa de 900 para 7.600 requisições por minuto, e a target tracking leva o grupo ao máximo de 6. O pico fica em 7.800 por minuto, umas 1.300 por instância, abaixo das 1.400 que cada uma aguenta pela conta do capítulo 13. O front quase não pesa nessa conta: o CloudFront entrega o `index.html` e o bundle pela borda de São Paulo, com 97% de acerto no cache. Até a meia-noite, são 1.140 pedidos, sem nenhum `502` no ALB e sem nenhum `too many clients` no banco. Você passa a noite olhando os gráficos como quem assiste a uma final de campeonato, com a diferença de que o seu time ganha. À 0h30, a ação `especial-tv-fim` devolve o mínimo a 2, e a política remove o excesso ao longo da madrugada.
 
-### Desmontar
+### A desmontagem
 
-No domingo de manhã, com o especial encerrado, o que cobra por hora volta a ser desligado. Se você está acompanhando sem um programa de TV marcado, não precisa esperar o sábado: desmonte agora, e o `--force-delete` leva as ações agendadas junto com o grupo. Comece pelo health check e pelo registro da API, que apontariam para um ALB inexistente. Para apagar um registro, o Route 53 exige o registro exato, igual ao que foi criado:
+No domingo de manhã, com o especial encerrado, o que cobra por hora volta a ser desligado. Quem está acompanhando sem um programa de TV marcado não precisa esperar o sábado para desmontar, e o `--force-delete` leva as ações agendadas junto com o grupo. A ordem começa pelo health check e pelo registro da API, que apontariam para um ALB inexistente. Para apagar um registro, o Route 53 exige o registro exato, igual ao que foi criado. É o único sistema que pede uma descrição perfeita da coisa que você quer jogar fora:
 
 ```bash
 aws route53 delete-health-check --health-check-id "$HC_ID"
@@ -564,13 +568,13 @@ Ficam a hosted zone (US$ 0,50 por mês), o certificado, o bucket `rango-front-<c
 
 > **Armadilha:** Certificado na região errada. Você pede o certificado em `sa-east-1`, porque o ALB está lá, e tenta usá-lo no CloudFront. Ele nem aparece na lista do console, e pela CLI a criação falha com `InvalidViewerCertificate`. Certificados do ACM não podem ser movidos entre regiões: peça outro em `us-east-1`. Com o certificado certo, o mesmo erro aparece quando um nome alternativo da distribuição não está entre os SANs.
 
-> **Armadilha:** Hosted zone recriada, delegação antiga. Ao apagar e recriar uma hosted zone, a AWS atribui outros quatro servidores de nome. O registrador continua apontando para os antigos, que agora não respondem pelo seu domínio, e o site some para quem não tiver a resposta em cache. Sempre que recriar a zona, atualize o Registro.br. O capítulo 15 traz a zona para o código sem apagá-la.
+> **Armadilha:** Hosted zone recriada, delegação antiga. Ao apagar e recriar uma hosted zone, a AWS atribui outros quatro servidores de nome. O registrador continua apontando para os antigos, que agora não respondem pelo seu domínio, e o site some para quem não tiver a resposta em cache. É mudar de casa e esquecer de avisar os Correios, só que quem fica sem receber é o cliente. Sempre que recriar a zona, atualize o Registro.br. O capítulo 15 traz a zona para o código sem apagá-la.
 
-> **Armadilha:** Registro de validação apagado. Alguém faz uma "limpeza" na zona e remove aqueles CNAMEs de nome estranho. Nada acontece por meses. Quando o ACM tenta renovar, a validação falha, e ele avisa por e-mail e pelo AWS Health Dashboard. Se ninguém olhar, o certificado vence. Com validade de 198 dias, a chance de alguém esquecer o que aqueles registros fazem entre uma renovação e outra só aumenta.
+> **Armadilha:** Registro de validação apagado. Alguém faz uma "limpeza" na zona, com o entusiasmo de quem arruma a gaveta dos outros, e remove aqueles CNAMEs de nome estranho. Nada acontece por meses. Quando o ACM tenta renovar, a validação falha, e ele avisa por e-mail e pelo AWS Health Dashboard. Se ninguém olhar, o certificado vence. Com validade de 198 dias, a chance de alguém esquecer o que aqueles registros fazem entre uma renovação e outra só aumenta.
 
 > **Armadilha:** Domínio preso em outra distribuição. Um nome alternativo só pode estar em uma distribuição de cada vez. Se você criar uma segunda distribuição com `rango.com.br`, a operação falha com `CNAMEAlreadyExists`. Isso vai aparecer no capítulo 15, quando o código tentar criar a distribuição que hoje existe só pelo console: a antiga precisa liberar o nome primeiro.
 
-> **Armadilha:** Price class barata demais. O `PriceClass_100` custa menos por GB porque usa só bordas da América do Norte, da Europa e de Israel. O `PriceClass_200` acrescenta Ásia, Oriente Médio e África. Nenhum dos dois inclui a América do Sul. Com eles, a sócia em Recife seria atendida por uma borda nos Estados Unidos, e o ganho de latência desapareceria quase todo. Para um público brasileiro, use `PriceClass_All`.
+> **Armadilha:** Price class barata demais. O `PriceClass_100` custa menos por GB porque usa só bordas da América do Norte, da Europa e de Israel. O `PriceClass_200` acrescenta Ásia, Oriente Médio e África. Nenhum dos dois inclui a América do Sul. Com eles, a sócia em Recife seria atendida por uma borda nos Estados Unidos, como pedir comida na lanchonete da esquina e ela sair de Miami, e o ganho de latência desapareceria quase todo. Para um público brasileiro, use `PriceClass_All`.
 
 > **Armadilha:** O mapeamento de erro esconde erros. O `CustomErrorResponses` vale para a distribuição inteira. Se um arquivo de `assets/` sumir do bucket, o CloudFront entrega o `index.html` com status `200` no lugar dele, e o Chrome mostra `Failed to load module script: Expected a JavaScript module script but the server responded with a MIME type of "text/html"`. É o que acontece se você usar `aws s3 sync --delete` num deploy enquanto alguém está com a versão anterior aberta: o navegador pede um pedaço antigo, sob demanda, e recebe HTML. Mantenha os assets antigos por alguns dias e, quando o tráfego crescer, troque o mapeamento por uma CloudFront Function que reescreve para `/index.html` só os caminhos sem extensão.
 
@@ -590,9 +594,9 @@ Ficam a hosted zone (US$ 0,50 por mês), o certificado, o bucket `rango-front-<c
 
 ## Arqueologia
 
-Conte os comandos usados para colocar o Rangô no ar desde o capítulo 9: subnets, rotas, Security Groups que dependem uns dos outros, um banco restaurado de um snapshot com nome de capítulo, uma AMI, duas versões de Launch Template, uma distribuição com um JSON de quarenta linhas, registros de DNS com aspas escapadas. Cada recriação "com os comandos do capítulo anterior" trouxe uma surpresa, como o endpoint do cache que mudou.
+Vale contar os comandos usados para colocar o Rangô no ar desde o capítulo 9: subnets, rotas, Security Groups que dependem uns dos outros, um banco restaurado de um snapshot com nome de capítulo, uma AMI, duas versões de Launch Template, uma distribuição com um JSON de quarenta linhas, registros de DNS com aspas escapadas. Cada recriação "com os comandos do capítulo anterior" trouxe uma surpresa, como o endpoint do cache que mudou.
 
-Agora você precisa de uma homologação idêntica à produção. Qual porta o `rango-endpoints` liberou? Que versão do Launch Template está valendo, e por quê? Ninguém lembra o que foi clicado, e recriar o ambiente virou arqueologia.
+Agora você precisa de uma homologação idêntica à produção. Qual porta o `rango-endpoints` liberou? Que versão do Launch Template está valendo, e por quê? Ninguém lembra o que foi clicado, e recriar o ambiente virou arqueologia, com pincelzinho de escavação e muito mais aspas escapadas.
 
 No próximo capítulo, o Rangô inteiro vira código Python, com o AWS CDK por cima do AWS CloudFormation. Um `cdk deploy` cria a VPC, o banco, o ALB, o ASG, a distribuição e os registros de DNS, e um `cdk destroy` apaga tudo sem deixar sobra. A partir dele, todo exemplo do livro usa CDK.
 

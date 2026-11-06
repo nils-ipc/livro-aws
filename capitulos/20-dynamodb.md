@@ -1,10 +1,10 @@
 # DynamoDB
 
-No capítulo anterior, o resumo de vendas e o webhook do PIX saíram do servidor e viraram funções Lambda: código que só existe quando é chamado, cobrado por milissegundo, atrás de uma HTTP API do API Gateway. O capítulo terminou com um aviso que vale para este: Lambda escala para centenas de ambientes em segundos, e o Postgres não acompanha. A stack `RangoProducao` foi destruída, e o banco deixou um snapshot novo esperando por nós.
+No capítulo anterior, o resumo de vendas e o webhook do PIX saíram do servidor e viraram funções Lambda: código que só existe quando é chamado, cobrado por milissegundo, atrás de uma HTTP API do API Gateway. O capítulo terminou com um aviso que vale para este: Lambda escala para centenas de ambientes em segundos, e o Postgres não acompanha. A stack `RangoProducao` foi destruída, e o banco deixou um snapshot novo esperando por nós, fiel como cachorro na porta de casa.
 
 ## Quarenta coordenadas por segundo
 
-O pedido do Bruno parece simples. O cliente quer ver o entregador andando no mapa. O aplicativo do entregador manda a posição a cada cinco segundos, e a tela do React pergunta "onde está meu pedido?" no mesmo ritmo.
+O pedido do Bruno parece simples. Os pedidos do Bruno sempre parecem simples; ninguém nunca pediu nada complicado numa frase só. O cliente quer ver o entregador andando no mapa. O aplicativo do entregador manda a posição a cada cinco segundos, e a tela do React pergunta "onde está meu pedido?" no mesmo ritmo.
 
 A primeira versão que vem à cabeça é uma tabela no Postgres que já existe:
 
@@ -18,15 +18,15 @@ CREATE TABLE posicoes (
 );
 ```
 
-Funciona no notebook. Agora faça a conta do jantar. Com 200 entregadores na rua, são 40 gravações por segundo, mais 40 leituras dos clientes olhando o mapa. Em quatro horas de pico por dia, isso dá 576 mil linhas por noite, uns 4 milhões por semana. Cada `INSERT` mexe no índice da chave primária, gera WAL, entra no backup e na réplica. E quase nenhuma dessas linhas vai ser lida de novo depois que o pedido chegar: passada uma hora, ninguém quer saber onde o entregador estava às 20h41.
+Funciona no notebook. Agora vem a conta do jantar. Com 200 entregadores na rua, são 40 gravações por segundo, mais 40 leituras dos clientes olhando o mapa. Em quatro horas de pico por dia, isso dá 576 mil linhas por noite, uns 4 milhões por semana. Cada `INSERT` mexe no índice da chave primária, gera WAL, entra no backup e na réplica. E quase nenhuma dessas linhas vai ser lida de novo depois que o pedido chegar: passada uma hora, ninguém quer saber onde o entregador estava às 20h41. É um dado com a validade de um "chego em cinco minutos".
 
-Agora coloque essa carga no `db.t4g.micro`, que já mostrou o `FATAL: sorry, too many clients already` no capítulo 13. Se a gravação de posição for para uma Lambda, cada ambiente abre a sua conexão. Num sábado de chuva, com o dobro de entregadores, as conexões acabam, e quem sofre junto é o `POST /pedidos`, que divide o mesmo banco. Um mapa derrubando a confirmação de pedidos rende um postmortem constrangedor.
+Agora coloque essa carga no `db.t4g.micro`, que já mostrou o `FATAL: sorry, too many clients already` no capítulo 13. Se a gravação de posição for para uma Lambda, cada ambiente abre a sua conexão. Num sábado de chuva, com o dobro de entregadores, as conexões acabam, e quem sofre junto é o `POST /pedidos`, que divide o mesmo banco. Um mapa derrubando a confirmação de pedidos rende um postmortem constrangedor. Ninguém quer explicar numa reunião que a pizza não foi confirmada porque o bonequinho da moto estava ocupado demais andando na tela.
 
-Daria para remendar com instância maior, RDS Proxy e um job noturno apagando linhas velhas, cada peça custando dinheiro e atenção. O rastreamento pede um lugar que aceite muitas gravações pequenas, responda a perguntas simples em milissegundos, dispense conexão aberta e jogue fora sozinho o que envelheceu.
+Daria para remendar com instância maior, RDS Proxy e um job noturno apagando linhas velhas, cada peça custando dinheiro e atenção. O mapa, que era um detalhe charmoso, viraria a parte mais cara da arquitetura, como o enfeite que custa mais do que o bolo. O rastreamento pede um lugar que aceite muitas gravações pequenas, responda a perguntas simples em milissegundos, dispense conexão aberta e jogue fora sozinho o que envelheceu.
 
 ## Um dicionário do tamanho que você precisar
 
-O **Amazon DynamoDB** é um banco de dados chave-valor e de documentos, totalmente gerenciado. Não existe instância para escolher, disco para aumentar ou versão para atualizar. E não existe conexão: cada operação é uma chamada HTTPS assinada com SigV4, autorizada pelo IAM. Mil Lambdas gravando nele não seguram nada aberto.
+O **Amazon DynamoDB** é um banco de dados chave-valor e de documentos, totalmente gerenciado. Não existe instância para escolher, disco para aumentar ou versão para atualizar. E não existe conexão: cada operação é uma chamada HTTPS assinada com SigV4, autorizada pelo IAM. Mil Lambdas gravando nele não seguram nada aberto. Para quem passou o capítulo 13 contando conexões como quem conta moedas no fim do mês, é um alívio quase físico.
 
 Para quem programa em Python, pense num dicionário de dicionários distribuído por muitas máquinas:
 
@@ -37,17 +37,17 @@ tabela = {
 }
 ```
 
-Cada linha é um **item**, e os campos dele são **atributos**. Fora da chave, nenhum atributo é obrigatório, e dois itens da mesma tabela podem ter atributos diferentes. Não existe `ALTER TABLE`: você grava o atributo novo, e ele passa a existir naquele item.
+Cada linha é um **item**, e os campos dele são **atributos**. Fora da chave, nenhum atributo é obrigatório, e dois itens da mesma tabela podem ter atributos diferentes. Não existe `ALTER TABLE`: você grava o atributo novo, e ele passa a existir naquele item. O DBA que mora dentro de você acaba de desmaiar. Deixe-o descansar; ele acorda no fim do capítulo, e com razão.
 
 ### Partition key e sort key
 
-A chave primária tem uma ou duas partes, e entender as duas é metade do capítulo.
+A chave primária tem uma ou duas partes, e entender as duas é metade do capítulo. A outra metade é aprender a conviver com a escolha.
 
-A **partition key** decide onde o item mora. O DynamoDB calcula um hash dela para escolher a **partição**, um pedaço da tabela guardado em servidores e replicado em três zonas de disponibilidade. É o `hash()` que escolhe a posição de uma chave num `dict`, só que o balde é uma máquina. Conforme a tabela cresce, o DynamoDB divide partições sem você ver.
+A **partition key** decide onde o item mora. O DynamoDB calcula um hash dela para escolher a **partição**, um pedaço da tabela guardado em servidores e replicado em três zonas de disponibilidade. É o `hash()` que escolhe a posição de uma chave num `dict`, só que o balde é uma máquina, refrigerada e com crachá na porta. Conforme a tabela cresce, o DynamoDB divide partições sem você ver, como o garçom que troca a toalha da mesa sem interromper a conversa.
 
 A **sort key** é opcional e ordena os itens com a mesma partition key. Esses itens formam uma **item collection** e ficam guardados juntos, em ordem: uma lista ordenada pendurada em cada chave do dicionário. É isso que permite pedir "as últimas 120 posições do pedido X" numa única leitura sequencial. A combinação das duas identifica o item, e gravar de novo a mesma combinação substitui o item.
 
-Cada partição tem um teto de cerca de 3.000 unidades de leitura e 1.000 de escrita por segundo. A *adaptive capacity* remaneja capacidade para uma partição muito procurada, sem passar desse teto. Por isso a partition key precisa espalhar o tráfego. O `id` do pedido espalha bem; a data do dia concentra todo mundo na mesma chave, a *hot partition*.
+Cada partição tem um teto de cerca de 3.000 unidades de leitura e 1.000 de escrita por segundo. A *adaptive capacity* remaneja capacidade para uma partição muito procurada, sem passar desse teto. Por isso a partition key precisa espalhar o tráfego. O `id` do pedido espalha bem; a data do dia concentra todo mundo na mesma chave, a *hot partition*. É o único banheiro aberto no intervalo do show, com os outros vinte interditados.
 
 ### As operações, e a que você deve evitar
 
@@ -55,25 +55,25 @@ A API é pequena. Para um item, você tem `PutItem` (grava ou substitui), `GetIt
 
 A `Query` recebe uma partition key exata e, opcionalmente, uma condição sobre a sort key: igual, maior, menor, entre dois valores ou "começa com". Ela lê só aquela item collection, em ordem, para frente ou para trás: um `SELECT ... WHERE pk = ? AND sk BETWEEN ? AND ? ORDER BY sk` que sempre usa índice, porque o próprio armazenamento é o índice.
 
-O `Scan` lê a tabela inteira, e você paga pela leitura de tudo. Ele existe para exportações e manutenção.
+O `Scan` lê a tabela inteira, e você paga pela leitura de tudo. Ele existe para exportações e manutenção. Usar `Scan` no dia a dia é procurar a chave do carro esvaziando a casa inteira na calçada, e pagando por gaveta aberta.
 
-A pegadinha para quem vem do SQL é a *filter expression*. `Query` e `Scan` aceitam um filtro sobre qualquer atributo, que parece um `WHERE`, só que roda depois da leitura. O DynamoDB lê os itens, cobra por eles e então descarta os que não passam. Um `Scan` com filtro `restaurante = cantina-da-nona` custa o mesmo que o `Scan` sem filtro. Também não há `JOIN`, `GROUP BY` ou subconsulta: se a pergunta não cabe numa `Query`, você muda o desenho das chaves ou cria um índice.
+A pegadinha para quem vem do SQL é a *filter expression*. `Query` e `Scan` aceitam um filtro sobre qualquer atributo, que parece um `WHERE`, só que roda depois da leitura. O DynamoDB lê os itens, cobra por eles e então descarta os que não passam. Um `Scan` com filtro `restaurante = cantina-da-nona` custa o mesmo que o `Scan` sem filtro. É pagar o rodízio inteiro e comer só a salada. Também não há `JOIN`, `GROUP BY` ou subconsulta: se a pergunta não cabe numa `Query`, você muda o desenho das chaves ou cria um índice.
 
-As leituras são *eventualmente consistentes* por padrão: logo depois de uma gravação, uma leitura pode devolver a versão anterior por uma fração de segundo. A leitura *fortemente consistente* (`ConsistentRead=True`) custa o dobro. E toda escrita aceita uma *condition expression*, "grave só se o atributo X tiver o valor Y"; se a condição falhar, nada é gravado e você recebe `ConditionalCheckFailedException`. É o `UPDATE ... WHERE status = 'pago'` do capítulo 19, com checagem e escrita atômicas no mesmo item.
+As leituras são *eventualmente consistentes* por padrão: logo depois de uma gravação, uma leitura pode devolver a versão anterior por uma fração de segundo. "Eventualmente", aqui, quer dizer milissegundos, e não o "eventualmente" das tarefas do backlog. A leitura *fortemente consistente* (`ConsistentRead=True`) custa o dobro. E toda escrita aceita uma *condition expression*, "grave só se o atributo X tiver o valor Y"; se a condição falhar, nada é gravado e você recebe `ConditionalCheckFailedException`. É o `UPDATE ... WHERE status = 'pago'` do capítulo 19, com checagem e escrita atômicas no mesmo item.
 
 ### Capacidade: pagar por requisição ou reservar
 
-O DynamoDB mede o trabalho em unidades. Na escrita, uma unidade cobre um item de até 1 KB; um item de 2,5 KB consome 3. Na leitura, uma unidade cobre até 4 KB com consistência forte; a leitura eventualmente consistente consome meia. As unidades usam KB binário, 1.024 bytes, e escritas dentro de transação contam em dobro.
+O DynamoDB mede o trabalho em unidades. Na escrita, uma unidade cobre um item de até 1 KB; um item de 2,5 KB consome 3. O DynamoDB arredonda para cima, como a balança do restaurante a quilo, que nunca erra a seu favor. Na leitura, uma unidade cobre até 4 KB com consistência forte; a leitura eventualmente consistente consome meia. As unidades usam KB binário, 1.024 bytes, e escritas dentro de transação contam em dobro.
 
-No modo **on-demand**, você paga por requisição. Não há nada para configurar: a tabela aceita o tráfego que chegar, até a cota padrão de 40.000 unidades de leitura e 40.000 de escrita por segundo por tabela, que pode ser aumentada. Os preços de referência em us-east-1, consultados em outubro de 2026, são de cerca de US$ 0,625 por milhão de unidades de escrita e US$ 0,125 por milhão de unidades de leitura. São valores aproximados; confira a página oficial e a calculadora antes de decidir. Em novembro de 2024, a AWS cortou pela metade o preço do on-demand em todas as regiões e passou a tratá-lo como o modo padrão para a maioria das cargas.
+No modo **on-demand**, você paga por requisição. Não há nada para configurar: a tabela aceita o tráfego que chegar, até a cota padrão de 40.000 unidades de leitura e 40.000 de escrita por segundo por tabela, que pode ser aumentada. Os preços de referência em us-east-1, consultados em outubro de 2026, são de cerca de US$ 0,625 por milhão de unidades de escrita e US$ 0,125 por milhão de unidades de leitura. São valores aproximados; confira a página oficial e a calculadora antes de decidir. Em novembro de 2024, a AWS cortou pela metade o preço do on-demand em todas as regiões e passou a tratá-lo como o modo padrão para a maioria das cargas. Metade do preço de verdade, sem o "a partir de" em letra miúda.
 
-No modo **provisionado**, você declara quantas unidades por segundo a tabela suporta (RCU para leitura, WCU para escrita) e paga por hora pela reserva, use ou não. O excedente recebe `ProvisionedThroughputExceededException`. O auto scaling ajusta a capacidade por política de alvo, como o ASG do capítulo 13, mas reduzir tem limite: quatro vezes no início do dia em UTC e mais uma por hora, no máximo 27 por dia.
+No modo **provisionado**, você declara quantas unidades por segundo a tabela suporta (RCU para leitura, WCU para escrita) e paga por hora pela reserva, use ou não. É a mesa reservada no restaurante: o lugar é seu, se você vai aparecer é problema seu. O excedente recebe `ProvisionedThroughputExceededException`. O auto scaling ajusta a capacidade por política de alvo, como o ASG do capítulo 13, mas reduzir tem limite: quatro vezes no início do dia em UTC e mais uma por hora, no máximo 27 por dia.
 
 Comece em on-demand. O provisionado compensa com tráfego alto, estável e já medido. O nível gratuito vale só para o provisionado (25 WCU e 25 RCU) e para os primeiros 25 GB de armazenamento, que custa cerca de US$ 0,25 por GB-mês na classe Standard.
 
 ## Começar pelas perguntas
 
-No Postgres, você modela as entidades, normaliza e depois escreve as consultas; o planejador responde qualquer `SELECT` que você inventar amanhã. O DynamoDB inverte a ordem. Você começa listando os **padrões de acesso**: as perguntas exatas que a aplicação vai fazer, com que frequência e com que dados na mão. Depois desenha as chaves para que cada pergunta vire um `GetItem` ou uma `Query`.
+No Postgres, você modela as entidades, normaliza e depois escreve as consultas; o planejador responde qualquer `SELECT` que você inventar amanhã. O DynamoDB inverte a ordem. Você começa listando os **padrões de acesso**: as perguntas exatas que a aplicação vai fazer, com que frequência e com que dados na mão. Depois desenha as chaves para que cada pergunta vire um `GetItem` ou uma `Query`. No Postgres, você enche a despensa e cozinha o que pedirem. No DynamoDB, você recebe o cardápio antes e compra só os ingredientes daqueles pratos.
 
 Para o rastreamento do Rangô, as perguntas são estas:
 
@@ -85,7 +85,7 @@ Para o rastreamento do Rangô, as perguntas são estas:
 | 4 | Restaurante | Quais entregas minhas estão na rua agora? | a cada 30 s |
 | 5 | Entregador | Iniciar e concluir a entrega do pedido X | 2 vezes por pedido |
 
-Repare no que falta: nenhuma pergunta do tipo "quanto tempo em média os entregadores levaram em outubro". Essa pergunta existe, o Bruno vai fazê-la um dia, e o lugar dela é outro. Voltamos a isso na seção sobre quando não usar.
+Repare no que falta: nenhuma pergunta do tipo "quanto tempo em média os entregadores levaram em outubro". Essa pergunta existe, o Bruno vai fazê-la um dia (provavelmente numa sexta, às seis da tarde), e o lugar dela é outro. Voltamos a isso na seção sobre quando não usar.
 
 ### Uma tabela, vários tipos de item
 
@@ -103,33 +103,33 @@ PEDIDO#5f0d2c1a-...    POS#1792094465000     posicao, expira_em
 
 O item `ATUAL` guarda o estado da entrega e a última posição. Ele é sobrescrito a cada cinco segundos e responde à pergunta 2 com um `GetItem`. Os itens `POS#...` são o histórico: um por posição, com a sort key formada pelo instante em milissegundos. A pergunta 3 vira uma `Query` com `begins_with(sk, "POS#")`, em ordem decrescente, limitada aos últimos 120 pontos (dez minutos).
 
-O número na sort key tem 13 dígitos, completados com zeros à esquerda. A sort key é texto, e texto ordena caractere a caractere: sem o preenchimento, `"POS#999"` viria depois de `"POS#1000"`. Toda chave numérica dentro de uma string precisa desse cuidado, o mesmo que você já teve ao nomear arquivos `01-`, `02-` para o `ls` mostrar na ordem.
+O número na sort key tem 13 dígitos, completados com zeros à esquerda. A sort key é texto, e texto ordena caractere a caractere: sem o preenchimento, `"POS#999"` viria depois de `"POS#1000"`. Toda chave numérica dentro de uma string precisa desse cuidado, o mesmo que você já teve ao nomear arquivos `01-`, `02-` para o `ls` mostrar na ordem. Quem já viu `capitulo-10` aparecer antes de `capitulo-2` sabe que a ordem alfabética não tem nenhum respeito pela matemática.
 
-Os nomes genéricos `pk` e `sk`, com prefixos como `PEDIDO#` e `POS#`, são a marca de uma técnica chamada **single-table design**: guardar entidades diferentes na mesma tabela, com as chaves arranjadas para que itens lidos juntos fiquem na mesma item collection. Para quem vem do SQL, é como guardar o resultado de um `JOIN` já pronto. Em vez de juntar `entregas` e `posicoes` na hora da leitura, você grava as duas coisas lado a lado e lê de uma vez.
+Os nomes genéricos `pk` e `sk`, com prefixos como `PEDIDO#` e `POS#`, são a marca de uma técnica chamada **single-table design**: guardar entidades diferentes na mesma tabela, com as chaves arranjadas para que itens lidos juntos fiquem na mesma item collection. Para quem vem do SQL, é como guardar o resultado de um `JOIN` já pronto. Em vez de juntar `entregas` e `posicoes` na hora da leitura, você grava as duas coisas lado a lado e lê de uma vez. É a marmita montada no domingo: dá trabalho na véspera, e na segunda é só abrir.
 
-A técnica tem custo. Uma tabela com dez tipos de item é difícil de ler no console, de explicar para quem chega no time e de mudar quando aparece um padrão de acesso imprevisto. Para o Rangô, a regra é modesta: uma tabela por domínio, com os itens lidos juntos. O rastreamento ganha a sua, `rango-entregas`.
+A técnica tem custo. Uma tabela com dez tipos de item é difícil de ler no console, de explicar para quem chega no time e de mudar quando aparece um padrão de acesso imprevisto. Toda empresa tem uma tabela assim, que só uma pessoa entende, e essa pessoa está de férias. Para o Rangô, a regra é modesta: uma tabela por domínio, com os itens lidos juntos. O rastreamento ganha a sua, `rango-entregas`.
 
 ### Um índice para o restaurante
 
 A pergunta 4 tem o restaurante na mão, e a partition key da tabela é o pedido. Sobraria o `Scan` com filtro, que lê tudo.
 
-A resposta é um **Global Secondary Index** (GSI): uma cópia de parte da tabela, mantida pelo DynamoDB de forma assíncrona, com outra chave primária. O índice `por-restaurante` usa `restaurante` como partition key e `iniciada_em` como sort key, e a `Query` nele responde "entregas da Cantina da Nona, da mais antiga para a mais nova". Leituras em GSI são sempre eventualmente consistentes, o que o painel do restaurante nem percebe.
+A resposta é um **Global Secondary Index** (GSI): uma cópia de parte da tabela, mantida pelo DynamoDB de forma assíncrona, com outra chave primária. O índice `por-restaurante` usa `restaurante` como partition key e `iniciada_em` como sort key, e a `Query` nele responde "entregas da Cantina da Nona, da mais antiga para a mais nova". Leituras em GSI são sempre eventualmente consistentes, o que o painel do restaurante nem percebe. Um mapa meio segundo atrasado não faz nenhum cozinheiro largar a panela.
 
-Um item só entra no GSI se tiver todos os atributos da chave do índice. Os itens `POS#...` não têm `restaurante` e ficam de fora; quando a entrega termina, remover `restaurante` do item `ATUAL` tira a entrega do índice. Esse padrão se chama **índice esparso** (*sparse index*): o GSI guarda só as entregas em andamento.
+Um item só entra no GSI se tiver todos os atributos da chave do índice. Os itens `POS#...` não têm `restaurante` e ficam de fora; quando a entrega termina, remover `restaurante` do item `ATUAL` tira a entrega do índice. Esse padrão se chama **índice esparso** (*sparse index*): o GSI guarda só as entregas em andamento. É uma lista de convidados que risca sozinha quem já foi embora da festa.
 
 O custo: toda escrita que mexe em atributos projetados no índice também é uma escrita no índice, cobrada à parte. A projeção padrão é `ALL`; há também `KEYS_ONLY` e `INCLUDE`. Como o restaurante quer ver a posição, fica `ALL`, e cada posição custa duas escritas, uma na tabela e uma no índice.
 
 > **Dica:** Existe também o Local Secondary Index (LSI), que troca só a sort key. Ele nasce com a tabela, no máximo cinco, e impede o DynamoDB de dividir uma item collection entre partições. Na dúvida, use GSI (até 20 por tabela, na cota padrão).
 
-> **Dica:** Desde novembro de 2025, a chave de um GSI pode ter até quatro atributos na partition key e quatro na sort key, sem custo adicional. Antes disso, um índice por "restaurante e status" exigia gravar um atributo sintético como `cantina-da-nona#em_rota`. Se você encontrar esse padrão de concatenação em código antigo, saiba que hoje ele tem alternativa.
+> **Dica:** Desde novembro de 2025, a chave de um GSI pode ter até quatro atributos na partition key e quatro na sort key, sem custo adicional. Antes disso, um índice por "restaurante e status" exigia gravar um atributo sintético como `cantina-da-nona#em_rota`. Se você encontrar esse padrão de concatenação em código antigo, saiba que hoje ele tem alternativa. Quem escreveu não estava confuso; só escreveu antes de novembro de 2025.
 
-## Mão na massa
+## Na prática
 
-Vamos acrescentar ao Rangô a tabela `rango-entregas`, as rotas de rastreamento na API do ECS e uma Lambda que avisa o Postgres quando a entrega termina. A tabela cuida do que muda a cada cinco segundos; o pedido, com status, valor e cobrança, continua no Postgres, que é o lugar dele.
+Esta parte acrescenta ao Rangô a tabela `rango-entregas`, as rotas de rastreamento na API do ECS e uma Lambda que avisa o Postgres quando a entrega termina. A tabela cuida do que muda a cada cinco segundos; o pedido, com status, valor e cobrança, continua no Postgres, que é o lugar dele. Dinheiro dos outros fica em banco relacional, com chave estrangeira e cinto de segurança.
 
 ### O ponto de partida
 
-Como no capítulo anterior, encontre o snapshot deixado pelo `cdk destroy`:
+Como no capítulo anterior, o ponto de partida é o snapshot deixado pelo `cdk destroy`, que este comando encontra:
 
 ```bash
 aws rds describe-db-snapshots --snapshot-type manual \
@@ -137,11 +137,11 @@ aws rds describe-db-snapshots --snapshot-type manual \
   --output text
 ```
 
-Coloque o nome no `snapshot_db` do `rango-infra/app.py`. O pedido pago no teste do webhook do capítulo 19 está nesse snapshot, e vai servir de cobaia.
+O nome dele vai no `snapshot_db` do `rango-infra/app.py`. O pedido pago no teste do webhook do capítulo 19 está nesse snapshot, e vai servir de cobaia. É o pedido mais testado da história do Rangô, e até hoje ninguém comeu.
 
 ### A tabela na stack
 
-No `rango-infra/rango_infra/rango_infra_stack.py`, acrescente os imports:
+No `rango-infra/rango_infra/rango_infra_stack.py`, entram os imports:
 
 ```python
 from aws_cdk import (
@@ -171,7 +171,7 @@ E a tabela, logo depois da VPC:
         )
 ```
 
-Repare no que a declaração tem e no que ela não tem. Só os atributos das chaves são declarados, com tipo (`STRING` ou `NUMBER`); todo o resto do item é livre. O `PAY_PER_REQUEST` é o on-demand. O nome fica a cargo do CDK, pelo mesmo motivo dos segredos: nome fixo impede a substituição do recurso. O `DESTROY` faz sentido aqui porque posições de entrega são descartáveis por natureza; numa tabela com dados que importam, use `RETAIN` e ligue o point-in-time recovery, que custa cerca de US$ 0,20 por GB-mês e restaura a tabela para qualquer segundo dos últimos 35 dias, como o PITR do RDS no capítulo 12.
+Repare no que a declaração tem e no que ela não tem. Só os atributos das chaves são declarados, com tipo (`STRING` ou `NUMBER`); todo o resto do item é livre. Quem já escreveu uma migration de cem linhas no Alembic sente uma pontinha de inveja. O `PAY_PER_REQUEST` é o on-demand. O nome fica a cargo do CDK, pelo mesmo motivo dos segredos: nome fixo impede a substituição do recurso. O `DESTROY` faz sentido aqui porque posições de entrega são descartáveis por natureza; numa tabela com dados que importam, use `RETAIN` e ligue o point-in-time recovery, que custa cerca de US$ 0,20 por GB-mês e restaura a tabela para qualquer segundo dos últimos 35 dias, como o PITR do RDS no capítulo 12.
 
 O `time_to_live_attribute` e o `stream` são os dois recursos que ainda não apresentei. Eles merecem uma seção cada, e chegam logo depois do código.
 
@@ -187,7 +187,7 @@ As tarefas do ECS rodam nas subnets `PRIVATE_ISOLATED`, sem NAT e sem internet. 
         )
 ```
 
-Sem essa linha, o log mostra `ConnectTimeoutError` para `dynamodb.us-east-1.amazonaws.com`, depois de algumas retentativas do boto3. Leva uma tarde para entender, porque a permissão está certa e a tabela existe.
+Sem essa linha, o log mostra `ConnectTimeoutError` para `dynamodb.us-east-1.amazonaws.com`, depois de algumas retentativas do boto3. Leva uma tarde para entender, porque a permissão está certa e a tabela existe. A tarde termina com alguém dizendo "era só uma linha", num tom que mistura alívio e vergonha.
 
 ### A API ganha acesso à tabela
 
@@ -208,11 +208,11 @@ Na task role da API e no container:
         )
 ```
 
-O `grant_read_write_data` cria uma policy com as ações de leitura e escrita de itens, no ARN da tabela e no ARN dos índices dela (`.../index/*`). Esquecer os índices é um erro comum quando se escreve a policy à mão: a `Query` na tabela funciona, a `Query` no GSI devolve `AccessDeniedException`. O nome da tabela é configuração, então vai como variável de ambiente comum.
+O `grant_read_write_data` cria uma policy com as ações de leitura e escrita de itens, no ARN da tabela e no ARN dos índices dela (`.../index/*`). Esquecer os índices é um erro comum quando se escreve a policy à mão: a `Query` na tabela funciona, a `Query` no GSI devolve `AccessDeniedException`. A tabela deixa você entrar na sala, e o índice pede o crachá de novo. O nome da tabela é configuração, então vai como variável de ambiente comum.
 
 ### O código da API
 
-Crie `backend/app/entregas.py`:
+O código fica em `backend/app/entregas.py`:
 
 ```python
 import os
@@ -362,11 +362,11 @@ def concluir(pedido_id: uuid.UUID):
     return {"pedido_id": str(pedido_id), "status": "entregue"}
 ```
 
-O `iniciar` lê o pedido no Postgres uma única vez, para conferir o pagamento e descobrir o restaurante; daí em diante, as posições não tocam no Postgres. O `attribute_not_exists(pk)` faz o `PutItem` falhar se o item `ATUAL` já existir, o que impede dois entregadores de iniciarem a mesma entrega.
+O `iniciar` lê o pedido no Postgres uma única vez, para conferir o pagamento e descobrir o restaurante; daí em diante, as posições não tocam no Postgres. O `attribute_not_exists(pk)` faz o `PutItem` falhar se o item `ATUAL` já existir, o que impede dois entregadores de iniciarem a mesma entrega. Sem isso, dois motoqueiros disputariam a mesma pizza na porta da cantina, cena que nenhum cliente merece assistir.
 
-O `registrar_posicao` usa `UpdateItem` com condição dupla. A primeira parte recusa posições de entregas encerradas ou nunca iniciadas. A segunda (`registrada_em < :t`) resolve um problema do capítulo 5: a rede do celular reordena mensagens, e a posição das 20h41min05s pode chegar depois da das 20h41min10s. Sem a condição, o mapa pularia para trás. Com ela, o próprio banco descarta a posição velha, sem ler antes de escrever. O instante vem do celular, que conhece a ordem real das leituras do GPS.
+O `registrar_posicao` usa `UpdateItem` com condição dupla. A primeira parte recusa posições de entregas encerradas ou nunca iniciadas. A segunda (`registrada_em < :t`) resolve um problema do capítulo 5: a rede do celular reordena mensagens, e a posição das 20h41min05s pode chegar depois da das 20h41min10s. Sem a condição, o mapa pularia para trás, e o cliente veria o entregador dando ré pela avenida. Com ela, o próprio banco descarta a posição velha, sem ler antes de escrever. O instante vem do celular, que conhece a ordem real das leituras do GPS.
 
-O `#st` existe porque `status` é palavra reservada do DynamoDB, e usá-lo direto numa expressão dá `ValidationException: ... Attribute name is a reserved keyword; reserved keyword: status`. A lista tem centenas de palavras; a posição vive num mapa `posicao` justamente para que `lat` e `lon` entrem como valor, sem placeholders.
+O `#st` existe porque `status` é palavra reservada do DynamoDB, e usá-lo direto numa expressão dá `ValidationException: ... Attribute name is a reserved keyword; reserved keyword: status`. A lista tem centenas de palavras, e lendo-a inteira dá a impressão de que alguém a montou olhando o seu modelo de dados; a posição vive num mapa `posicao` justamente para que `lat` e `lon` entrem como valor, sem placeholders.
 
 O `Decimal(str(...))` é obrigatório, porque o boto3 se recusa a gravar `float`:
 
@@ -374,11 +374,11 @@ O `Decimal(str(...))` é obrigatório, porque o boto3 se recusa a gravar `float`
 TypeError: Float types are not supported. Use Decimal types instead.
 ```
 
-O número do DynamoDB tem precisão decimal, e o `float` do Python é binário: `-8.05` vira `-8.0500000000000007105...`. Passar pelo `str` gera o `Decimal("-8.05")` esperado. Na leitura, o FastAPI converte os `Decimal` para JSON sozinho.
+O número do DynamoDB tem precisão decimal, e o `float` do Python é binário: `-8.05` vira `-8.0500000000000007105...`. Passar pelo `str` gera o `Decimal("-8.05")` esperado. O `float` é o colega que arredonda a conta do bar "mais ou menos"; o DynamoDB exige nota fiscal. Na leitura, o FastAPI converte os `Decimal` para JSON sozinho.
 
 O `trajeto` usa a filter expression do jeito certo: sobre itens que a `Query` já leu pela chave, para esconder posições expiradas (o motivo aparece na seção sobre TTL). O `Limit` conta os itens lidos antes do filtro. E o `concluir` faz três coisas numa escrita condicional: muda o status, remove `restaurante` (tirando a entrega do índice esparso) e dá ao item `ATUAL` um prazo de expiração.
 
-Inclua o router no `backend/app/main.py`, como o das fotos:
+O router entra no `backend/app/main.py`, como o das fotos:
 
 ```python
 from app.entregas import router as entregas_router
@@ -390,7 +390,7 @@ app.include_router(entregas_router)
 
 > **Dica:** O `TABELA_ENTREGAS` tem um valor padrão para os testes do CI e o Compose subirem sem AWS. Para desenvolver contra uma tabela local, existe a imagem oficial `amazon/dynamodb-local`, e o boto3 aceita a variável de ambiente `AWS_ENDPOINT_URL_DYNAMODB` para apontar para ela sem mudar o código.
 
-No React, o mapa do cliente pergunta a posição a cada cinco segundos. O componente de mapa fica por sua conta; a parte que conversa com a API é esta:
+No React, o mapa do cliente pergunta a posição a cada cinco segundos. O componente de mapa fica por sua conta (desenhar a motinha andando consome uma sprint inteira de alguém muito feliz); a parte que conversa com a API é esta:
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -416,17 +416,17 @@ export function usePosicaoEntregador(pedidoId: string) {
 
 ### TTL: o banco joga fora o que envelheceu
 
-O **Time to Live** (TTL) é o job de limpeza que você não precisa escrever. Você escolhe um atributo da tabela, aqui o `expira_em`, e grava nele um instante no formato epoch Unix em segundos, como `Number`. Quando esse instante passa, o DynamoDB apaga o item por conta própria, sem cobrar escrita por isso. Se o atributo não existir no item ou tiver outro tipo (uma string com data ISO, por exemplo), o item é ignorado e vive para sempre.
+O **Time to Live** (TTL) é o job de limpeza que você não precisa escrever. Você escolhe um atributo da tabela, aqui o `expira_em`, e grava nele um instante no formato epoch Unix em segundos, como `Number`. Quando esse instante passa, o DynamoDB apaga o item por conta própria, sem cobrar escrita por isso. Se o atributo não existir no item ou tiver outro tipo (uma string com data ISO, por exemplo), o item é ignorado e vive para sempre, como o pote de sorvete com feijão no fundo do congelador.
 
-É o `EXPIRE` do Redis do capítulo 4, com uma diferença que pega muita gente: o apagamento acontece "tipicamente dentro de alguns dias" depois da expiração, nas palavras da documentação. Até lá, o item expirado continua aparecendo em `GetItem`, `Query` e `Scan`, e por isso o `trajeto` filtra por `expira_em`. TTL controla o tamanho da tabela; regra de negócio confere a data no código.
+É o `EXPIRE` do Redis do capítulo 4, com uma diferença que pega muita gente: o apagamento acontece "tipicamente dentro de alguns dias" depois da expiração, nas palavras da documentação. É a faxina gratuita que não marca dia: um dia ela vem. Até lá, o item expirado continua aparecendo em `GetItem`, `Query` e `Scan`, e por isso o `trajeto` filtra por `expira_em`. TTL controla o tamanho da tabela; regra de negócio confere a data no código.
 
-Atualizar um item expirado antes da limpeza, estendendo ou removendo o `expira_em`, cancela a expiração; a documentação recomenda uma condition expression quando o item não deveria ressuscitar. E as exclusões do TTL aparecem no Stream marcadas como feitas pelo serviço.
+Atualizar um item expirado antes da limpeza, estendendo ou removendo o `expira_em`, cancela a expiração; a documentação recomenda uma condition expression quando o item não deveria ressuscitar. Sessão zumbi é um filme que ninguém quer ver. E as exclusões do TTL aparecem no Stream marcadas como feitas pelo serviço.
 
 No Rangô, o histórico fica 24 horas, e o item `ATUAL` some 24 horas depois da conclusão. Localização de entregador é dado pessoal, e a LGPD agradece quando ele não fica guardado sem motivo.
 
 ### O painel do restaurante ganha um login
 
-Hoje, quem adivinhar o nome `cantina-da-nona` vê onde estão os entregadores do restaurante. O painel precisa de login, e sessão é um caso clássico para o DynamoDB: chave conhecida, `GetItem` e prazo de validade. Uma tabela do domínio do painel guarda usuários e sessões, logo abaixo da `TabelaEntregas`:
+Hoje, quem adivinhar o nome `cantina-da-nona` vê onde estão os entregadores do restaurante. A segurança depende de ninguém pensar no nome que está escrito na fachada. O painel precisa de login, e sessão é um caso clássico para o DynamoDB: chave conhecida, `GetItem` e prazo de validade. Uma tabela do domínio do painel guarda usuários e sessões, logo abaixo da `TabelaEntregas`:
 
 ```python
         tabela_painel = dynamodb.Table(
@@ -440,7 +440,7 @@ Hoje, quem adivinhar o nome `cantina-da-nona` vê onde estão os entregadores do
         tabela_painel.grant_read_write_data(role_app)
 ```
 
-No container da API, o `environment` ganha `"TABELA_PAINEL": tabela_painel.table_name`. Acrescente `argon2-cffi` ao `backend/requirements.txt`, fixando a versão, e crie `backend/app/painel.py`:
+No container da API, o `environment` ganha `"TABELA_PAINEL": tabela_painel.table_name`. O `backend/requirements.txt` ganha o `argon2-cffi`, com a versão fixada, e o código fica em `backend/app/painel.py`:
 
 ```python
 import hashlib
@@ -501,7 +501,7 @@ def restaurante_logado(authorization: str = Header(default="")) -> str:
     return sessao["restaurante"]
 ```
 
-A tabela guarda só o hash Argon2 da senha, feito por uma biblioteca estabelecida. Para e-mail inexistente, o código verifica contra um hash descartável, e a resposta tem o mesmo tempo e a mesma mensagem. Do token, a tabela guarda só o SHA-256; quem a ler não se passa por ninguém. E, como o TTL apaga com atraso, a sessão vencida é recusada pelo código.
+A tabela guarda só o hash Argon2 da senha, feito por uma biblioteca estabelecida. Para e-mail inexistente, o código verifica contra um hash descartável, e a resposta tem o mesmo tempo e a mesma mensagem. Do token, a tabela guarda só o SHA-256; quem a ler não se passa por ninguém. E, como o TTL apaga com atraso, a sessão vencida é recusada pelo código. Expulsar visitante não pode depender da faxina que não marca dia.
 
 No `entregas.py`, a rota do restaurante passa a exigir a sessão e a conferir o dono:
 
@@ -521,17 +521,17 @@ def entregas_do_restaurante(
         # ... igual ao anterior ...
 ```
 
-Inclua o `painel_router` no `main.py`. No React, o painel guarda o token em memória e o manda no cabeçalho `Authorization: Bearer`. É um login mínimo, sem MFA nem limite de tentativas, e precisa de revisão de alguém de segurança antes da produção; o capítulo 23 volta a ele.
+O `painel_router` entra no `main.py`. No React, o painel guarda o token em memória e o manda no cabeçalho `Authorization: Bearer`. É um login mínimo, sem MFA nem limite de tentativas, e precisa de revisão de alguém de segurança antes da produção; o capítulo 23 volta a ele.
 
 ### Streams: a entrega concluída chega ao Postgres
 
-O pedido no Postgres precisa saber que foi entregue. O caminho óbvio é o `concluir` fazer um `UPDATE` no Postgres depois de gravar no DynamoDB. É a escrita dupla do capítulo 5: se o processo morrer entre as duas, os dois bancos discordam para sempre.
+O pedido no Postgres precisa saber que foi entregue. O caminho óbvio é o `concluir` fazer um `UPDATE` no Postgres depois de gravar no DynamoDB. É a escrita dupla do capítulo 5: se o processo morrer entre as duas, os dois bancos discordam para sempre. É o velho problema de quem tem dois relógios em casa e nunca sabe que horas são.
 
 O **DynamoDB Streams** resolve isso do lado do banco. Ele registra cada alteração de item num log ordenado por item, disponível por 24 horas. Cada registro carrega só as chaves (`KEYS_ONLY`), o item depois (`NEW_IMAGE`), o item antes (`OLD_IMAGE`) ou os dois (`NEW_AND_OLD_IMAGES`). Escolhemos os dois para detectar a transição de `em_rota` para `entregue`.
 
 É o *transactional outbox* do capítulo 5 entregue pelo banco: a gravação e o registro no Stream acontecem juntos. A Lambda lê o Stream por um *event source mapping*, um processo do serviço Lambda que junta registros em lotes e chama a função, e essas leituras não são cobradas.
 
-Crie `backend/lambdas/rango_lambda/entrega_concluida.py`:
+A função fica em `backend/lambdas/rango_lambda/entrega_concluida.py`:
 
 ```python
 from banco import conexao
@@ -582,20 +582,20 @@ Na stack, a função usa o auxiliar `funcao` do capítulo 19, que já cuida da l
         )
 ```
 
-O filtro economiza dinheiro. Sem ele, a função seria chamada 40 vezes por segundo para ignorar posições. Com ele, o event source mapping descarta antes de chamar, e só a transição `em_rota` → `entregue` passa.
+O filtro economiza dinheiro. Sem ele, a função seria chamada 40 vezes por segundo para ignorar posições: uma Lambda paga para passar o dia dizendo "não é comigo", emprego com que muita gente sonha. Com ele, o event source mapping descarta antes de chamar, e só a transição `em_rota` → `entregue` passa.
 
 O `bisect_batch_on_error` divide o lote ao meio quando a função falha, para isolar o registro problemático. Depois da quinta tentativa, o registro é descartado em silêncio, porque não há destino para falhas. Guarde esse detalhe para a ponte. O `DynamoEventSource` dá à role a permissão de ler o Stream, e o `sg_lambdas` do capítulo 19 já alcança o banco.
 
 ### O deploy e o primeiro trajeto
 
-Reative os workflows, faça o commit de `backend/` e `rango-infra/` e envie para a `main`:
+O deploy começa reativando os workflows e enviando o commit de `backend/` e `rango-infra/` para a `main`:
 
 ```bash
 gh workflow enable ci.yaml
 gh workflow enable renovar-tasks.yaml
 ```
 
-Depois da sua aprovação no environment `producao`, o pipeline publica a imagem nova da API e o `cdk deploy` cria a tabela, o endpoint e a função. Repita os passos do webhook do capítulo 19 para ter um pedido pago em `$PEDIDO`. Agora faça o papel do entregador:
+Depois da sua aprovação no environment `producao`, o pipeline publica a imagem nova da API e o `cdk deploy` cria a tabela, o endpoint e a função. Os passos do webhook do capítulo 19 deixam um pedido pago em `$PEDIDO`. Com ele, o script abaixo faz o papel do entregador, sem capacete e sem pegar chuva:
 
 ```bash
 API=https://api.rango.com.br
@@ -613,7 +613,7 @@ for ponto in "-8.0631 -34.8711" "-8.0612 -34.8730" "-8.0598 -34.8752"; do
 done
 ```
 
-Para o papel do restaurante, cadastre uma usuária no painel. O hash é gerado no seu terminal (com `pip install argon2-cffi`), e a senha não aparece no histórico do shell:
+Para o papel do restaurante, o painel precisa de uma usuária cadastrada. O hash é gerado no terminal de quem faz o cadastro (com `pip install argon2-cffi`), e a senha não aparece no histórico do shell:
 
 ```bash
 HASH=$(python3 -c "import getpass; from argon2 import PasswordHasher; print(PasswordHasher().hash(getpass.getpass()))")
@@ -650,7 +650,7 @@ curl -s "$API/restaurantes/cantina-da-nona/entregas" -H "Authorization: Bearer $
 [{"pedido_id":"5f0d2c1a-9e3b-4b7f-8a61-0c4e2d9b7a35","entregador":"joao-p","posicao":{"lat":-8.0598,"lon":-34.8752}}]
 ```
 
-Agora o teste do capítulo 5: mande uma posição com um instante anterior ao da última.
+Agora o teste do capítulo 5: uma posição com um instante anterior ao da última.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$API/entregas/$PEDIDO/posicao" \
@@ -664,7 +664,7 @@ curl -s "$API/entregas/$PEDIDO" | jq -c .posicao
 {"lat":-8.0598,"lon":-34.8752}
 ```
 
-A posição atrasada foi recusada pela condição, e o mapa não pulou. Conclua a entrega e confira o Postgres pela API de pedidos:
+A posição atrasada foi recusada pela condição, e o mapa não pulou. O instante `1000000000000` cai em setembro de 2001, um atraso de uns 25 anos, demais até para entrega em dia de chuva. Por fim, a entrega é concluída, e a API de pedidos mostra o que ficou no Postgres:
 
 ```bash
 curl -s -X POST "$API/entregas/$PEDIDO/concluir" | jq -c .
@@ -679,11 +679,11 @@ curl -s "$API/restaurantes/cantina-da-nona/entregas" -H "Authorization: Bearer $
 []
 ```
 
-O Stream levou a mudança até a Lambda, que atualizou o Postgres. E a entrega saiu do índice do restaurante, porque perdeu o atributo `restaurante`. Chame o `concluir` de novo e você recebe 409; a Lambda não é chamada, porque o filtro só aceita a transição a partir de `em_rota`.
+O Stream levou a mudança até a Lambda, que atualizou o Postgres. E a entrega saiu do índice do restaurante, porque perdeu o atributo `restaurante`. Uma segunda chamada ao `concluir` recebe 409 (a mesma pizza não se entrega duas vezes, por mais que o cliente gostasse); a Lambda não é chamada, porque o filtro só aceita a transição a partir de `em_rota`.
 
 ### Olhando a tabela pela CLI
 
-A CLI mostra quanto cada operação custa, o que ajuda a fixar o modelo. Pegue o nome da tabela e faça a `Query` do trajeto, pedindo o consumo:
+A CLI mostra quanto cada operação custa, o que ajuda a fixar o modelo. O exemplo pega o nome da tabela e faz a `Query` do trajeto, pedindo o consumo:
 
 ```bash
 TABELA=$(aws dynamodb list-tables \
@@ -703,7 +703,7 @@ aws dynamodb query --table-name "$TABELA" \
 }
 ```
 
-Três itens pequenos cabem em 4 KB, então a leitura eventualmente consistente custou meia unidade. Agora o jeito errado de responder a pergunta do restaurante, com `Scan` e filtro:
+Três itens pequenos cabem em 4 KB, então a leitura eventualmente consistente custou meia unidade. Com o preço de referência, dá para repetir essa leitura mais de dez milhões de vezes antes de gastar um dólar, e mesmo assim alguém vai perguntar no Slack se não dá para cachear. Agora o jeito errado de responder a pergunta do restaurante, com `Scan` e filtro:
 
 ```bash
 aws dynamodb scan --table-name "$TABELA" \
@@ -713,7 +713,7 @@ aws dynamodb scan --table-name "$TABELA" \
   --query "{itens: Count, lidos: ScannedCount, consumo: ConsumedCapacity.CapacityUnits}"
 ```
 
-Compare `Count` (itens devolvidos) com `ScannedCount` (itens lidos e cobrados). Numa noite de jantar, o `ScannedCount` seria 576 mil para devolver uma dúzia, que é o que a `Query` no índice esparso lê.
+A comparação que importa é entre `Count` (itens devolvidos) e `ScannedCount` (itens lidos e cobrados). Numa noite de jantar, o `ScannedCount` seria 576 mil para devolver uma dúzia, que é o que a `Query` no índice esparso lê. Quase ninguém tem mais lista telefônica em casa, mas o `Scan` mantém viva a experiência de folhear todas as páginas para achar um número.
 
 ### Quanto isso custa
 
@@ -727,7 +727,7 @@ Com os preços de referência de outubro de 2026 em us-east-1 (aproximados; conf
 | Armazenamento | < 1 GB, graças ao TTL | dentro dos 25 GB gratuitos |
 | Lambda e Stream | algumas centenas de entregas por dia | centavos |
 
-Uns US$ 33 por mês, quase tudo em escritas, um terço delas no índice. Para baixar, grave o histórico a cada três posições ou projete só as chaves no índice.
+Uns US$ 33 por mês, quase tudo em escritas, um terço delas no índice. Menos do que a pizza de sexta do time, o que, para uma linha da fatura da AWS, é quase um elogio. Para baixar, grave o histórico a cada três posições ou projete só as chaves no índice.
 
 ### Desmontando
 
@@ -738,17 +738,17 @@ gh workflow disable ci.yaml
 gh workflow disable renovar-tasks.yaml
 ```
 
-As duas tabelas vão embora com o `DESTROY`, junto com o índice, o Stream e a usuária do painel, que você cadastra de novo quando recriar a stack. O banco deixa um snapshot novo, como sempre.
+As duas tabelas vão embora com o `DESTROY`, junto com o índice, o Stream e a usuária do painel, que você cadastra de novo quando recriar a stack. O banco deixa um snapshot novo, como sempre. A coleção de snapshots do Rangô já rivaliza com o álbum de figurinhas da Copa.
 
 ## Quando não usar o DynamoDB
 
-Depois da API respondendo em milissegundos, aparece a tentação de mover os pedidos para lá também. Resista.
+Depois da API respondendo em milissegundos, aparece a tentação de mover os pedidos para lá também. Resista. O DBA interior acordou do desmaio e trouxe argumentos.
 
-O resumo de vendas do capítulo 19 é um `GROUP BY restaurante` com `sum` e `avg`. No DynamoDB, ele vira um `Scan` com agregação em Python, ou uma tabela de totais mantida por um Stream. Relatórios e perguntas que o Bruno ainda não fez pedem SQL.
+O resumo de vendas do capítulo 19 é um `GROUP BY restaurante` com `sum` e `avg`. No DynamoDB, ele vira um `Scan` com agregação em Python, ou uma tabela de totais mantida por um Stream. Relatórios e perguntas que o Bruno ainda não fez pedem SQL. E ele não vai aceitar "preciso de um GSI e duas semanas" como resposta para "quanto vendemos ontem?".
 
 Padrões de acesso mudam. No Postgres, uma pergunta nova é um `CREATE INDEX`; no DynamoDB, pode ser um GSI ou um backfill em milhões de itens.
 
-Relações e restrições também. Chave estrangeira, `UNIQUE` fora da chave, `CHECK` e cascata viram código seu. Existem transações (`TransactWriteItems`), que custam o dobro e têm limite de itens; para pedido com cobrança, cupom e estoque, o Postgres faz melhor.
+Relações e restrições também. Chave estrangeira, `UNIQUE` fora da chave, `CHECK` e cascata viram código seu, e código seu vem com bugs seus. Existem transações (`TransactWriteItems`), que custam o dobro e têm limite de itens; para pedido com cobrança, cupom e estoque, o Postgres faz melhor.
 
 O DynamoDB brilha com acesso sempre por chave, padrões conhecidos, escritas em volume alto ou imprevisível e vontade de zero operação: sessões, carrinhos, rastreamento, contadores, chaves de idempotência. O Rangô agora usa os dois bancos, cada um onde é bom.
 
@@ -760,7 +760,7 @@ O DynamoDB brilha com acesso sempre por chave, padrões conhecidos, escritas em 
 
 > **Armadilha:** O Stream de uma tabela comum aceita no máximo dois leitores simultâneos por shard (em global tables, um). A terceira Lambda pendurada nele sofre throttling. Para muitos consumidores, um leitor publica num barramento de eventos, assunto do próximo capítulo.
 
-> **Na vida real:** Em 20 de setembro de 2015, o DynamoDB de us-east-1 passou horas com erros que chegaram a cerca de 55% das requisições. Os servidores de armazenamento consultam um serviço interno de metadados para saber de quais partições cuidam, e a adoção rápida de GSIs tinha inchado essas respostas até perto do limite de tempo. Uma falha breve de rede fez muitos servidores perguntarem ao mesmo tempo, e as retentativas mantiveram o serviço sobrecarregado. É a tempestade de retentativas do capítulo 5 dentro da própria AWS. "Gerenciado" quer dizer que outra equipe cuida da operação; a falha continua possível.
+> **Na vida real:** Em 20 de setembro de 2015, o DynamoDB de us-east-1 passou horas com erros que chegaram a cerca de 55% das requisições. Os servidores de armazenamento consultam um serviço interno de metadados para saber de quais partições cuidam, e a adoção rápida de GSIs tinha inchado essas respostas até perto do limite de tempo. Uma falha breve de rede fez muitos servidores perguntarem ao mesmo tempo, e as retentativas mantiveram o serviço sobrecarregado. É a tempestade de retentativas do capítulo 5 dentro da própria AWS. Saber que acontece com eles também é um consolo estranho, mas é um consolo. "Gerenciado" quer dizer que outra equipe cuida da operação; a falha continua possível.
 
 ## Resumo
 
@@ -776,9 +776,9 @@ O DynamoDB brilha com acesso sempre por chave, padrões conhecidos, escritas em 
 
 ## O pedido que ninguém enxerga inteiro
 
-Olhe o caminho que um pedido do Rangô percorre hoje. O `POST /pedidos` grava no Postgres e chama o gateway de pagamento, esperando a resposta. Um stream no Valkey, inventado no capítulo 5, avisa o restaurante e manda o e-mail, com mensagens pendentes presas ao nome de tarefas que já não existem. O webhook do PIX chega por uma Lambda. A conclusão da entrega chega por outra, pelo Stream do DynamoDB, e se ela falhar cinco vezes o registro some sem deixar rastro.
+O caminho que um pedido do Rangô percorre hoje é este. O `POST /pedidos` grava no Postgres e chama o gateway de pagamento, esperando a resposta. Um stream no Valkey, inventado no capítulo 5, avisa o restaurante e manda o e-mail, com mensagens pendentes presas ao nome de tarefas que já não existem, como recados na geladeira de uma casa que já mudou de endereço. O webhook do PIX chega por uma Lambda. A conclusão da entrega chega por outra, pelo Stream do DynamoDB, e se ela falhar cinco vezes o registro some sem deixar rastro.
 
-Cada peça funciona, e ninguém enxerga o pedido de ponta a ponta. Se o restaurante recusar um pedido já pago, quem devolve o dinheiro? Se o e-mail falhar, quem tenta de novo, e quando alguém fica sabendo? O Bruno já pediu um SMS para o cliente quando o entregador sair, e isso seria mais uma chamada pendurada no meio da cadeia.
+Cada peça funciona, e ninguém enxerga o pedido de ponta a ponta. Se o restaurante recusar um pedido já pago, quem devolve o dinheiro? Se o e-mail falhar, quem tenta de novo, e quando alguém fica sabendo? O Bruno já pediu um SMS para o cliente quando o entregador sair, e isso seria mais uma chamada pendurada no meio da cadeia. A arquitetura, neste ponto, lembra uma extensão ligada em outra extensão, ligada num benjamim.
 
 O próximo capítulo troca essa cadeia por mensagens e eventos de verdade: Amazon SQS com dead letter queue e visibility timeout, Amazon SNS para avisar vários interessados de uma vez, Amazon EventBridge como barramento e agendador com fuso horário, e AWS Step Functions para desenhar o fluxo do pedido como uma máquina de estados que mostra, a qualquer momento, em que passo cada pedido está.
 

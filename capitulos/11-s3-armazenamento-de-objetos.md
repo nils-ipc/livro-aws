@@ -1,25 +1,25 @@
 # S3: armazenamento de objetos
 
-No capítulo anterior, o Rangô ganhou uma rede própria, a `rango-vpc`, com subnets públicas para o que precisa receber tráfego da internet e subnets privadas para o banco. Testamos o desenho com uma API e um Postgres em instâncias separadas, destruímos as máquinas e o NAT Gateway, e deixamos de pé só o que é gratuito. Entre essas peças ficou um gateway endpoint do S3 na route table privada, criado de propósito para este capítulo.
+No capítulo anterior, o Rangô ganhou uma rede própria, a `rango-vpc`, com subnets públicas para o que precisa receber tráfego da internet e subnets privadas para o banco. Testamos o desenho com uma API e um Postgres em instâncias separadas, destruímos as máquinas e o NAT Gateway, e deixamos de pé só o que é gratuito. Entre essas peças ficou um gateway endpoint do S3 na route table privada, criado de propósito para este capítulo. Ele ficou lá, quieto, como aquele cabo HDMI que você guarda há dez anos porque um dia vai precisar. O dia chegou.
 
 ## Trezentas e quarenta fotos num disco de 10 GiB
 
-A primeira versão do upload de fotos era a mais óbvia possível. O formulário do painel do restaurante enviava o arquivo num `multipart/form-data`, a rota do FastAPI recebia o `UploadFile` e gravava em `/opt/rango/fotos/cantina-da-nona/lasanha.jpg`. Uma rota estática devolvia a imagem quando o React pedia. Funcionou no primeiro dia, com três fotos de teste.
+A primeira versão do upload de fotos era a mais óbvia possível. O formulário do painel do restaurante enviava o arquivo num `multipart/form-data`, a rota do FastAPI recebia o `UploadFile` e gravava em `/opt/rango/fotos/cantina-da-nona/lasanha.jpg`. Uma rota estática devolvia a imagem quando o React pedia. Funcionou no primeiro dia, com três fotos de teste. Toda arquitetura ruim funciona no primeiro dia; é assim que ela consegue o emprego.
 
-Aí a Cantina da Nona mandou 340 fotos tiradas no celular, de 4 MB cada. São cerca de 1,3 GB de um único restaurante, num volume EBS de 10 GiB que já carrega o sistema operacional, o Python, o código e os logs. Mais seis restaurantes com o mesmo entusiasmo e o `df -h` mostra 100%. Quando o disco enche, a foto deixa de ser o problema principal: o Valkey não consegue gravar, o journald para de registrar e o Nginx começa a devolver erro 500 sem deixar pista no log.
+Aí a Cantina da Nona mandou 340 fotos tiradas no celular, de 4 MB cada. A Nona, pelo visto, fotografou cada lasanha de três ângulos, como perito documentando cena de crime. São cerca de 1,3 GB de um único restaurante, num volume EBS de 10 GiB que já carrega o sistema operacional, o Python, o código e os logs. Mais seis restaurantes com o mesmo entusiasmo e o `df -h` mostra 100%. Quando o disco enche, a foto deixa de ser o problema principal: o Valkey não consegue gravar, o journald para de registrar e o Nginx começa a devolver erro 500 sem deixar pista no log. Disco cheio é o único bug que derruba tudo e ainda apaga as provas, como o mordomo dos romances policiais.
 
 Aumentar o volume adiaria o problema, e os outros são piores:
 
-- Quando a API tiver três instâncias atrás de um load balancer (o capítulo 4 já avisou), a foto enviada para a instância A não existe nas instâncias B e C. Dois terços das vezes, o prato aparece sem imagem.
+- Quando a API tiver três instâncias atrás de um load balancer (o capítulo 4 já avisou), a foto enviada para a instância A não existe nas instâncias B e C. Dois terços das vezes, o prato aparece sem imagem, e o cliente pede a lasanha por fé.
 - Cada foto exibida ocupa um processo Python servindo bytes que não mudam. Com dois workers do Uvicorn, uma página com 20 pratos disputa os mesmos processos que estão tentando confirmar pedidos.
-- O upload também passa pela API. Um dono de restaurante num 4G fraco leva 40 segundos para enviar 4 MB, e durante esses 40 segundos uma conexão fica presa no seu servidor.
-- Se a instância for destruída, as fotos vão junto, a menos que alguém se lembre de fazer snapshot do volume.
+- O upload também passa pela API. Um dono de restaurante num 4G fraco leva 40 segundos para enviar 4 MB, e durante esses 40 segundos uma conexão fica presa no seu servidor, segurando a porta para alguém que ainda está no estacionamento.
+- Se a instância for destruída, as fotos vão junto, a menos que alguém se lembre de fazer snapshot do volume. "Alguém se lembrar" é a estratégia de backup mais popular do mundo e a que menos funciona.
 
-O disco local da instância é o lugar errado para guardar arquivos que os usuários enviam. Precisamos de um armazenamento que fique fora de qualquer servidor, que todas as instâncias enxerguem igual, que cresça sem ninguém redimensionar nada e que o navegador consiga acessar sem passar pelo Python.
+O disco local da instância é o lugar errado para guardar arquivos que os usuários enviam. Precisamos de um armazenamento que fique fora de qualquer servidor, que todas as instâncias enxerguem igual, que cresça sem ninguém redimensionar nada e que o navegador consiga acessar sem passar pelo Python. Ou seja, um lugar onde a Nona possa fotografar à vontade.
 
 ## Um dicionário gigante acessado por HTTP
 
-O Amazon S3 (Simple Storage Service) foi um dos primeiros serviços da AWS, lançado em 2006, e resolve exatamente isso. A forma mais fácil de entendê-lo é esquecer a ideia de disco e pensar num dicionário Python muito grande, acessado por HTTP:
+O Amazon S3 (Simple Storage Service) foi um dos primeiros serviços da AWS, lançado em 2006 (o que, em anos de nuvem, faz dele o avô que ainda bate ponto), e resolve exatamente isso. A forma mais fácil de entendê-lo é esquecer a ideia de disco e pensar num dicionário Python muito grande, acessado por HTTP:
 
 ```python
 # O modelo mental do S3
@@ -29,26 +29,26 @@ bucket = {
 }
 ```
 
-O *bucket* é o dicionário. Cada entrada é um **objeto**: os bytes do arquivo mais alguns metadados (tipo de conteúdo, tamanho, data, cabeçalhos que você definir). A chave do dicionário se chama, sem surpresa, **key**. Você grava com `PUT`, lê com `GET`, apaga com `DELETE` e lista as chaves com um prefixo. Quase não há mais operações do que isso.
+O *bucket* é o dicionário. Cada entrada é um **objeto**: os bytes do arquivo mais alguns metadados (tipo de conteúdo, tamanho, data, cabeçalhos que você definir). A chave do dicionário se chama, sem surpresa, **key**. A AWS reserva a criatividade para os nomes dos serviços, não para os conceitos. Você grava com `PUT`, lê com `GET`, apaga com `DELETE` e lista as chaves com um prefixo. Quase não há mais operações do que isso. É a API enxuta que todo backend promete ser na primeira sprint e esquece na terceira.
 
-Repare que a key tem barras, mas o S3 não tem pastas. `fotos/cantina-da-nona/lasanha.jpg` é uma string única. O console mostra "pastas" porque agrupa as chaves pelo caractere `/`, por conveniência. Na prática, isso significa que não existe "renomear pasta": mudar um prefixo é copiar cada objeto para uma chave nova e apagar a antiga. Também não existe editar um pedaço do arquivo. Você substitui o objeto inteiro ou não mexe nele.
+Repare que a key tem barras, mas o S3 não tem pastas. `fotos/cantina-da-nona/lasanha.jpg` é uma string única. O console mostra "pastas" porque agrupa as chaves pelo caractere `/`, por conveniência. Na prática, isso significa que não existe "renomear pasta": mudar um prefixo é copiar cada objeto para uma chave nova e apagar a antiga. Quem já tentou "só renomear a pasta" com dois milhões de objetos costuma contar a história com o olhar perdido. Também não existe editar um pedaço do arquivo. Você substitui o objeto inteiro ou não mexe nele.
 
 Essa simplicidade tem contrapartidas que interessam ao Rangô:
 
 - **Capacidade**: o bucket não tem limite de tamanho nem de número de objetos. Você não provisiona espaço e paga pelo que está guardado, por GB por mês.
-- **Durabilidade**: na classe padrão, cada objeto é gravado em dispositivos de pelo menos três zonas de disponibilidade da região. A AWS projeta essa classe para 99,999999999% de durabilidade (os famosos "onze noves") em um ano. Perder um arquivo por falha de hardware deixa de ser uma preocupação sua. Apagá-lo por engano continua sendo, e voltamos a isso no versionamento.
+- **Durabilidade**: na classe padrão, cada objeto é gravado em dispositivos de pelo menos três zonas de disponibilidade da região. A AWS projeta essa classe para 99,999999999% de durabilidade (os famosos "onze noves") em um ano. Perder um arquivo por falha de hardware deixa de ser uma preocupação sua. Apagá-lo por engano continua sendo, e voltamos a isso no versionamento. Contra o dedo humano, nenhuma quantidade de noves ajuda.
 - **Acesso por HTTP**: qualquer cliente que fale HTTPS e saiba assinar uma requisição consegue ler e gravar. Isso inclui a CLI, o boto3 e, com a autorização certa, o navegador do seu usuário.
-- **Consistência**: desde dezembro de 2020, o S3 tem consistência forte de leitura após escrita. Se o `PUT` retornou 200, o próximo `GET` de qualquer lugar já devolve a versão nova.
+- **Consistência**: desde dezembro de 2020, o S3 tem consistência forte de leitura após escrita. Se o `PUT` retornou 200, o próximo `GET` de qualquer lugar já devolve a versão nova. Antes disso, havia casos em que o S3 se comportava como aquele colega que confirma o recebimento do e-mail e só lê na semana seguinte.
 
-O nome do bucket tem uma regra que pega todo mundo na primeira vez: ele é único no mundo inteiro, entre todas as contas da AWS. Se alguém já criou `fotos`, você não cria. Por isso o livro usa `rango-fotos-pratos`, o nome que apareceu na policy do capítulo 8, e você vai precisar acrescentar um sufixo seu, como o número da conta. O nome também vira parte da URL (`https://rango-fotos-pratos.s3.amazonaws.com/...`), então não coloque nele nada que você não queira ver num log de terceiros.
+O nome do bucket tem uma regra que pega todo mundo na primeira vez: ele é único no mundo inteiro, entre todas as contas da AWS. Se alguém já criou `fotos`, você não cria. É como tentar registrar um e-mail só com o seu primeiro nome hoje em dia. Por isso o livro usa `rango-fotos-pratos`, o nome que apareceu na policy do capítulo 8, e você vai precisar acrescentar um sufixo seu, como o número da conta. O nome também vira parte da URL (`https://rango-fotos-pratos.s3.amazonaws.com/...`), então não coloque nele nada que você não queira ver num log de terceiros.
 
-Cada conta pode ter até 10.000 buckets de uso geral por padrão, valor que subiu de 100 em novembro de 2024 e pode chegar a 1 milhão pelo Service Quotas. Os primeiros 2.000 são gratuitos. Para o Rangô, um bucket basta.
+Cada conta pode ter até 10.000 buckets de uso geral por padrão, valor que subiu de 100 em novembro de 2024 e pode chegar a 1 milhão pelo Service Quotas. Os primeiros 2.000 são gratuitos. Para o Rangô, um bucket basta. Se um dia você precisar de um milhão de buckets, este livro já não tem muito a lhe ensinar.
 
 ### Quanto custa guardar as fotos
 
-Pelos valores de referência que encontramos em outubro de 2026 para `us-east-1` (vindos de levantamentos de terceiros, porque a tabela oficial não abriu na consulta), a classe padrão custa cerca de US$ 0,023 por GB por mês. As 340 fotos da Cantina da Nona ocupam 1,3 GB, ou uns 3 centavos de dólar por mês. As requisições também são cobradas: cerca de US$ 0,005 por mil `PUT` e US$ 0,0004 por mil `GET`. Confira os números atuais na página de preços do S3 ou no AWS Pricing Calculator antes de fazer qualquer projeção.
+Pelos valores de referência que encontramos em outubro de 2026 para `us-east-1` (vindos de levantamentos de terceiros, porque a tabela oficial não abriu na consulta), a classe padrão custa cerca de US$ 0,023 por GB por mês. As 340 fotos da Cantina da Nona ocupam 1,3 GB, ou uns 3 centavos de dólar por mês. A Nona gastou mais com o papel-toalha que usou para limpar a lente do celular. As requisições também são cobradas: cerca de US$ 0,005 por mil `PUT` e US$ 0,0004 por mil `GET`. Confira os números atuais na página de preços do S3 ou no AWS Pricing Calculator antes de fazer qualquer projeção.
 
-O item que costuma surpreender é a transferência para a internet. Os primeiros 100 GB por mês são gratuitos, somando todos os serviços e regiões da conta. Depois disso, cada GB que sai da AWS para o navegador de alguém é cobrado. Uma foto de 4 MB vista 50 mil vezes por mês já são 200 GB. O capítulo 14 coloca o CloudFront na frente do bucket, e o capítulo 24 volta ao assunto de tráfego de saída.
+O item que costuma surpreender é a transferência para a internet. O S3 funciona como estacionamento de shopping: entrar é tranquilo, o que custa é sair. Os primeiros 100 GB por mês são gratuitos, somando todos os serviços e regiões da conta. Depois disso, cada GB que sai da AWS para o navegador de alguém é cobrado. Uma foto de 4 MB vista 50 mil vezes por mês já são 200 GB. O capítulo 14 coloca o CloudFront na frente do bucket, e o capítulo 24 volta ao assunto de tráfego de saída.
 
 ## Classes de armazenamento: a despensa e o depósito
 
@@ -64,39 +64,39 @@ Nem todo objeto é lido com a mesma frequência. A foto do prato do dia é lida 
 | S3 Glacier Flexible Retrieval | Arquivo que pode esperar minutos ou horas | 90 dias | Exige restauração antes |
 | S3 Glacier Deep Archive | Retenção longa, quase nunca lida | 180 dias | Restauração em horas |
 
-Duas letras miúdas dessa tabela mudam a conta. A primeira é a duração mínima: se você mover um objeto para Glacier Instant Retrieval e apagá-lo no dia 10, paga os 90 dias do mesmo jeito. A segunda é o tamanho mínimo: Standard-IA, One Zone-IA e Glacier Instant Retrieval cobram cada objeto como se tivesse pelo menos 128 KB. Uma miniatura de 20 KB nessas classes custa como uma de 128 KB. Nas duas classes de arquivo com restauração, cada objeto ainda carrega uns 40 KB extras de metadados cobrados.
+Duas letras miúdas dessa tabela mudam a conta. A primeira é a duração mínima: se você mover um objeto para Glacier Instant Retrieval e apagá-lo no dia 10, paga os 90 dias do mesmo jeito, como quem paga o pacote de três meses do curso de inglês e vai a duas aulas. A segunda é o tamanho mínimo: Standard-IA, One Zone-IA e Glacier Instant Retrieval cobram cada objeto como se tivesse pelo menos 128 KB. Uma miniatura de 20 KB nessas classes custa como uma de 128 KB. Nas duas classes de arquivo com restauração, cada objeto ainda carrega uns 40 KB extras de metadados cobrados.
 
-Como ordem de grandeza (valores de terceiros, outubro de 2026), Standard-IA fica em torno de US$ 0,0125 por GB por mês e Deep Archive perto de US$ 0,001: o depósito sai mais de vinte vezes mais barato que a bancada.
+Como ordem de grandeza (valores de terceiros, outubro de 2026), Standard-IA fica em torno de US$ 0,0125 por GB por mês e Deep Archive perto de US$ 0,001: o depósito sai mais de vinte vezes mais barato que a bancada. Em compensação, buscar a louça de Natal lá no fundo leva horas e envolve uma escada.
 
 One Zone-IA guarda o objeto numa só AZ, então use apenas para dados que você consegue gerar de novo, como miniaturas. Intelligent-Tiering serve para quando você não sabe o padrão de acesso: o S3 move cada objeto sozinho entre níveis, sem cobrar pela leitura, mas cobra uma taxa mensal de monitoramento por objeto.
 
-Para o Rangô de hoje, tudo fica em Standard. O volume é pequeno e as fotos são lidas o tempo todo. As outras classes vão importar quando os backups do Postgres começarem a ocupar terabytes.
+Para o Rangô de hoje, tudo fica em Standard. Otimizar custo de armazenamento de 1,3 GB seria como contratar um consultor para reorganizar uma gaveta de talheres. O volume é pequeno e as fotos são lidas o tempo todo. As outras classes vão importar quando os backups do Postgres começarem a ocupar terabytes.
 
 ## Lifecycle: regras que trabalham enquanto você dorme
 
-Mover objetos de classe à mão não escala. O S3 tem *lifecycle rules*: regras declarativas no bucket que dizem o que fazer com os objetos conforme a idade deles. Lembra um job agendado de limpeza que você não escreve nem monitora. Cada regra tem um filtro (prefixo, tags ou tamanho) e ações, como mudar `backups/` para Glacier Flexible Retrieval após 30 dias ou apagar `tmp/` após 1 dia.
+Mover objetos de classe à mão não escala. O S3 tem *lifecycle rules*: regras declarativas no bucket que dizem o que fazer com os objetos conforme a idade deles. Lembra um job agendado de limpeza que você não escreve nem monitora. Talvez seja o único cron da história que nunca falhou em silêncio numa segunda-feira. Cada regra tem um filtro (prefixo, tags ou tamanho) e ações, como mudar `backups/` para Glacier Flexible Retrieval após 30 dias ou apagar `tmp/` após 1 dia.
 
-Há duas restrições que evitam frustração. Um objeto precisa ter pelo menos 30 dias para ser transicionado para Standard-IA ou One Zone-IA. E, desde setembro de 2024, as regras novas, por padrão, não transicionam objetos menores que 128 KB para nenhuma classe, porque o custo da requisição de transição seria maior que a economia. Se você quiser mudar isso, existe o filtro `ObjectSizeGreaterThan` (e o `ObjectSizeLessThan`). Regras criadas antes de setembro de 2024 mantêm o comportamento antigo até serem editadas.
+Há duas restrições que evitam frustração. Um objeto precisa ter pelo menos 30 dias para ser transicionado para Standard-IA ou One Zone-IA. E, desde setembro de 2024, as regras novas, por padrão, não transicionam objetos menores que 128 KB para nenhuma classe, porque o custo da requisição de transição seria maior que a economia. Se você quiser mudar isso, existe o filtro `ObjectSizeGreaterThan` (e o `ObjectSizeLessThan`). Regras criadas antes de setembro de 2024 mantêm o comportamento antigo até serem editadas. É o tipo de detalhe que ninguém lê no anúncio e todo mundo descobre do pior jeito.
 
 ## Versionamento: o `git log` do bucket
 
-Lembra que um `PUT` na mesma key substitui o objeto? Com o bucket no modo padrão, substituir é apagar. Um bug que grava a foto da lasanha na key da foto do baião destrói o baião para sempre. Um `aws s3 rm --recursive` digitado no terminal errado leva tudo.
+Lembra que um `PUT` na mesma key substitui o objeto? Com o bucket no modo padrão, substituir é apagar. Um bug que grava a foto da lasanha na key da foto do baião destrói o baião para sempre. Um `aws s3 rm --recursive` digitado no terminal errado leva tudo. Quem nunca rodou um comando destrutivo no terminal de produção achando que era o de teste só não teve tempo de carreira suficiente.
 
 O versionamento muda esse comportamento. Com ele ligado, cada `PUT` cria uma nova versão do objeto e guarda as anteriores, cada uma com um `VersionId`. Um `DELETE` comum não apaga nada: ele coloca um **delete marker** por cima, uma espécie de lápide que faz o objeto parecer inexistente. Remover o delete marker traz o objeto de volta. Para apagar de verdade, você precisa pedir a exclusão de uma versão específica.
 
-Se você pensou em `git`, acertou: cada versão é um commit, o delete marker é um commit que remove o arquivo, e restaurar é fazer checkout de uma versão anterior. A diferença é que o S3 cobra armazenamento por todas essas versões. Sobrescrever uma foto de 4 MB dez vezes deixa 40 MB guardados.
+Se você pensou em `git`, acertou: cada versão é um commit, o delete marker é um commit que remove o arquivo, e restaurar é fazer checkout de uma versão anterior. A diferença é que o S3 cobra armazenamento por todas essas versões. Sobrescrever uma foto de 4 MB dez vezes deixa 40 MB guardados. É um repositório git que nunca roda `gc` e manda boleto.
 
 Daí a combinação clássica: versionamento ligado mais uma lifecycle rule que apaga versões antigas (as *noncurrent versions*) depois de alguns dias. Você ganha uma janela para desfazer erros sem pagar para sempre por eles.
 
-Uma vez ligado, o versionamento não pode ser desligado, apenas suspenso.
+Uma vez ligado, o versionamento não pode ser desligado, apenas suspenso. É como foto antiga na internet: dá para esconder, sumir não.
 
 ## Quem pode ler o bucket
 
-Até aqui falamos de onde os bytes ficam. A parte que derrubou empresas inteiras é outra: quem tem permissão para lê-los.
+Até aqui falamos de onde os bytes ficam. A parte que derrubou empresas inteiras é outra: quem tem permissão para lê-los. Nenhum diretor jurídico jamais perdeu o sono por causa de onze noves.
 
 O capítulo 8 mostrou que a AWS avalia permissões juntando dois tipos de policy. A **identity-based policy** fica presa a quem pede (um usuário, uma role). A **resource-based policy** fica presa ao recurso. No S3, essa segunda é a **bucket policy**: um JSON no próprio bucket, com o mesmo formato que você já conhece, mais o campo `Principal` dizendo a quem a regra se aplica. Na mesma conta, um `Allow` em qualquer uma das duas basta, e um `Deny` explícito em qualquer uma das duas vence.
 
-O problema histórico está no `Principal`. Uma bucket policy com `"Principal": "*"` e `"Action": "s3:GetObject"` significa "qualquer pessoa na internet pode ler qualquer objeto". Muitas vezes é alguém tentando fazer uma imagem aparecer no front e copiando a primeira resposta que encontrou. Havia ainda as ACLs, permissões por objeto anteriores ao IAM, com "AllUsers: READ" a um clique de distância no console. Dezenas de empresas foram parar nas manchetes por um bucket aberto para "facilitar" uma integração e nunca mais fechado.
+O problema histórico está no `Principal`. Uma bucket policy com `"Principal": "*"` e `"Action": "s3:GetObject"` significa "qualquer pessoa na internet pode ler qualquer objeto". Muitas vezes é alguém tentando fazer uma imagem aparecer no front e copiando a primeira resposta que encontrou, aquela com 400 votos e data de 2014. Havia ainda as ACLs, permissões por objeto anteriores ao IAM, com "AllUsers: READ" a um clique de distância no console. Dezenas de empresas foram parar nas manchetes por um bucket aberto para "facilitar" uma integração e nunca mais fechado.
 
 A AWS respondeu em camadas. A primeira foi o **S3 Block Public Access**, uma trava acima de todas as policies e ACLs, com quatro configurações:
 
@@ -107,11 +107,11 @@ A AWS respondeu em camadas. A primeira foi o **S3 Block Public Access**, uma tra
 | `BlockPublicPolicy` | Rejeita bucket policies que concedam acesso público |
 | `RestrictPublicBuckets` | Se uma policy pública já existir, restringe o acesso a principals da AWS e da própria conta |
 
-O Block Public Access pode ser ligado em cada bucket e também na conta inteira. Ligado na conta, nenhum bucket fica público, nem que alguém escreva `"Principal": "*"` por engano.
+O Block Public Access pode ser ligado em cada bucket e também na conta inteira. Ligado na conta, nenhum bucket fica público, nem que alguém escreva `"Principal": "*"` por engano, mesmo que esse alguém seja você às seis da tarde de uma sexta-feira.
 
-A segunda camada veio como padrão. Desde abril de 2023, todo bucket novo nasce com as quatro configurações do Block Public Access ligadas e com as ACLs desabilitadas (a configuração *Object Ownership* fica em `BucketOwnerEnforced`: tudo que entra no bucket pertence à conta dona dele, e qualquer tentativa de definir uma ACL falha). Isso vale para buckets criados pelo console, pela CLI, pelo SDK ou pelo CloudFormation, em todas as regiões. Buckets antigos não mudaram, então uma conta com histórico pode ter buckets criados em 2019 com ACLs ativas.
+A segunda camada veio como padrão. Desde abril de 2023, todo bucket novo nasce com as quatro configurações do Block Public Access ligadas e com as ACLs desabilitadas (a configuração *Object Ownership* fica em `BucketOwnerEnforced`: tudo que entra no bucket pertence à conta dona dele, e qualquer tentativa de definir uma ACL falha). Isso vale para buckets criados pelo console, pela CLI, pelo SDK ou pelo CloudFormation, em todas as regiões. Buckets antigos não mudaram, então uma conta com histórico pode ter buckets criados em 2019 com ACLs ativas, guardados como sítio arqueológico com risco de desabamento.
 
-Uma terceira proteção, menos ligada à exposição, também virou padrão: desde 5 de janeiro de 2023, todo objeto novo é criptografado em repouso com SSE-S3 (AES-256, com chaves gerenciadas pela AWS), sem custo. Criptografia em repouso protege contra um disco roubado do data center. Ela não protege contra uma policy aberta: o S3 descriptografa com prazer para quem tem permissão de leitura. As chaves gerenciadas por você, com o KMS, ficam para o capítulo 16.
+Uma terceira proteção, menos ligada à exposição, também virou padrão: desde 5 de janeiro de 2023, todo objeto novo é criptografado em repouso com SSE-S3 (AES-256, com chaves gerenciadas pela AWS), sem custo. Criptografia em repouso protege contra um disco roubado do data center. Ela não protege contra uma policy aberta: o S3 descriptografa com prazer para quem tem permissão de leitura. É um cofre blindado com um atendente muito simpático na frente. As chaves gerenciadas por você, com o KMS, ficam para o capítulo 16.
 
 O bucket do Rangô nasce fechado, e vai continuar assim. Só que, fechado, o React não consegue mostrar nem enviar fotos, e mandar tudo pela API seria voltar ao começo do capítulo. Existe uma terceira saída.
 
@@ -119,7 +119,7 @@ O bucket do Rangô nasce fechado, e vai continuar assim. Só que, fechado, o Rea
 
 Uma *presigned URL* é uma URL do S3 que já carrega a assinatura de uma requisição específica. Quem gera é alguém com permissão (a API do Rangô, usando a role dela). Quem usa pode ser qualquer pessoa, sem credencial nenhuma. A URL diz exatamente o que pode ser feito (método, bucket, key, às vezes o `Content-Type`), até quando, e em nome de quem.
 
-A analogia é um ingresso de show com assento marcado e horário. A bilheteria (a API) confere se você pode entrar e emite o ingresso. Na porta (o S3), ninguém pergunta seu nome, só confere o ingresso. Se você tentar entrar em outra sessão ou sentar em outro lugar, a assinatura não bate e a porta fecha.
+A analogia é um ingresso de show com assento marcado e horário. A bilheteria (a API) confere se você pode entrar e emite o ingresso. Na porta (o S3), ninguém pergunta seu nome, só confere o ingresso. Se você tentar entrar em outra sessão ou sentar em outro lugar, a assinatura não bate e a porta fecha. E, ao contrário dos shows de verdade, não tem fila de quatro horas nem taxa de conveniência.
 
 O fluxo de upload direto do navegador fica assim:
 
@@ -146,28 +146,28 @@ O fluxo de upload direto do navegador fica assim:
     |                              |--------------------------->|
 ```
 
-Repare no passo 2: gerar a URL é um cálculo local com a credencial da API, sem chamada ao S3. Os 4 MB vão do celular direto para a AWS, e o Uvicorn só cuida de duas requisições pequenas de JSON.
+Repare no passo 2: gerar a URL é um cálculo local com a credencial da API, sem chamada ao S3. Os 4 MB vão do celular direto para a AWS, e o Uvicorn só cuida de duas requisições pequenas de JSON. Pela primeira vez na vida, o Python fica com a parte leve do serviço.
 
 Agora as letras miúdas, todas importantes:
 
 **Validade.** Uma URL assinada com credenciais de um usuário IAM pode valer até 7 dias. Só que o Rangô não usa usuário IAM (o capítulo 8 cuidou disso), e aqui mora a surpresa: uma URL assinada com credenciais temporárias expira quando a credencial expira, mesmo que você tenha pedido mais tempo. Na EC2, as credenciais da role (o instance profile) costumam durar umas 6 horas. Numa sessão com `AssumeRole`, o padrão é 1 hora. No ECS, as credenciais são trocadas a cada 1 a 6 horas. Na sua máquina, com o SSO do capítulo 8, a URL morre junto com a sessão. Peça sempre expirações curtas, e você nem chega perto desse limite.
 
-**Reuso.** A URL pode ser usada quantas vezes alguém quiser até expirar. Um `PUT` repetido na mesma key substitui o objeto. Por isso a key é sempre gerada pela API com um UUID, e nunca escolhida pelo navegador.
+**Reuso.** A URL pode ser usada quantas vezes alguém quiser até expirar. Um `PUT` repetido na mesma key substitui o objeto. Por isso a key é sempre gerada pela API com um UUID, e nunca escolhida pelo navegador. Deixar o cliente escolher a key é como deixar o hóspede escolher o número do quarto, inclusive os que já estão ocupados.
 
-**Portador.** A presigned URL funciona como um bearer token. Quem tiver a URL tem o acesso, então ela não deve ir para logs, analytics ou mensagens de erro detalhadas.
+**Portador.** A presigned URL funciona como um bearer token. Quem tiver a URL tem o acesso, então ela não deve ir para logs, analytics ou mensagens de erro detalhadas. Colar uma dessas no canal geral do time equivale a ler a senha do cofre no microfone da festa da firma.
 
-O boto3 também oferece a presigned POST (`generate_presigned_post`), pensada para formulários HTML. No Rangô vamos de presigned PUT, mais simples com `fetch`, e conferimos o tamanho depois do upload.
+O boto3 também oferece a presigned POST (`generate_presigned_post`), pensada para formulários HTML. No Rangô vamos de presigned PUT, mais simples com `fetch`, e conferimos o tamanho depois do upload. Formulário HTML puro, em 2026, só no painel do condomínio.
 
-## Mão na massa: as fotos do Rangô no S3
+## Na prática: as fotos do Rangô no S3
 
-Pré-requisitos: AWS CLI v2 com o profile `rango-dev` do capítulo 8 (e o `rango-admin` para um passo de IAM), o projeto do Rangô com o Compose do capítulo 6 e uma foto qualquer chamada `lasanha.jpg` na pasta atual. Todos os comandos usam `us-east-1`.
+Pré-requisitos: AWS CLI v2 com o profile `rango-dev` do capítulo 8 (e o `rango-admin` para um passo de IAM), o projeto do Rangô com o Compose do capítulo 6 e uma foto qualquer chamada `lasanha.jpg` na pasta atual. Todos os comandos usam `us-east-1`. A lasanha é opcional, mas melhora muito a leitura.
 
 ```bash
 export AWS_PROFILE=rango-dev
 aws sso login --sso-session rango
 ```
 
-### Criar o bucket
+### O bucket
 
 O nome precisa ser único no mundo, então usamos o número da conta como sufixo:
 
@@ -185,11 +185,11 @@ aws s3api create-bucket --bucket "$BUCKET" --region us-east-1
 }
 ```
 
-Em `us-east-1`, o `create-bucket` não leva `--create-bucket-configuration`. Em outras regiões, como `sa-east-1`, é preciso acrescentar `--create-bucket-configuration LocationConstraint=sa-east-1`. O bucket fica em `us-east-1`, junto da nossa VPC e do gateway endpoint.
+Em `us-east-1`, o `create-bucket` não leva `--create-bucket-configuration`. Em outras regiões, como `sa-east-1`, é preciso acrescentar `--create-bucket-configuration LocationConstraint=sa-east-1`. O bucket fica em `us-east-1`, junto da nossa VPC e do gateway endpoint. Por que a região padrão dispensa o parâmetro e as outras não? Porque a `us-east-1` é a filha mais velha da AWS e tem regalias que as irmãs nunca vão ter.
 
-### Conferir o que veio ligado
+### O que veio ligado de fábrica
 
-Antes de mexer em qualquer coisa, confirme os padrões de segurança:
+Antes de mexer em qualquer coisa, vale conferir os padrões de segurança:
 
 ```bash
 aws s3api get-public-access-block --bucket "$BUCKET"
@@ -221,7 +221,7 @@ aws s3api get-bucket-encryption --bucket "$BUCKET" \
 }
 ```
 
-As quatro travas estão ligadas, as ACLs estão desabilitadas e a criptografia SSE-S3 está ativa. Agora suba uma foto e tente lê-la como um estranho leria:
+As quatro travas estão ligadas, as ACLs estão desabilitadas e a criptografia SSE-S3 está ativa. O próximo passo é subir uma foto e tentar lê-la como um estranho leria:
 
 ```bash
 aws s3 cp lasanha.jpg "s3://$BUCKET/teste/lasanha.jpg"
@@ -233,7 +233,7 @@ curl -s "https://$BUCKET.s3.amazonaws.com/teste/lasanha.jpg"
 <Error><Code>AccessDenied</Code><Message>Access Denied</Message>...</Error>
 ```
 
-Esse `AccessDenied` é o comportamento que queremos. O `curl` não assinou nada, então é um anônimo pedindo, e o bucket recusa. Para ver a diferença, gere uma URL assinada de leitura pela CLI:
+Esse `AccessDenied` é o comportamento que queremos. Raramente um erro traz tanta alegria, então aproveite. O `curl` não assinou nada, então é um anônimo pedindo, e o bucket recusa. A diferença aparece com uma URL assinada de leitura, gerada pela CLI:
 
 ```bash
 URL=$(aws s3 presign "s3://$BUCKET/teste/lasanha.jpg" --expires-in 120)
@@ -244,11 +244,11 @@ curl -s -o /dev/null -w "%{http_code}\n" "$URL"
 200
 ```
 
-Abra a mesma URL no navegador e a foto aparece. Espere dois minutos, recarregue, e o S3 responde com `AccessDenied` e a mensagem `Request has expired`.
+No navegador, a mesma URL mostra a foto. Dois minutos depois, ao recarregar a página, o S3 responde com `AccessDenied` e a mensagem `Request has expired`. A Cinderela tinha até meia-noite; a lasanha tem 120 segundos.
 
 ### A bucket policy
 
-O bucket já é privado. A policy que vamos colocar só acrescenta proibições, com dois `Deny`. O primeiro recusa qualquer acesso que não use HTTPS. O segundo usa a condição `s3:signatureAge`, a idade da assinatura em milissegundos, para recusar uploads assinados há mais de 10 minutos. Mesmo que um bug na API gere uma URL de upload com validade de um dia, ela para de funcionar em 10 minutos. Salve como `infra/s3/rango-fotos-policy.json`, trocando o nome do bucket:
+O bucket já é privado. A policy que vamos colocar só acrescenta proibições, com dois `Deny`. O primeiro recusa qualquer acesso que não use HTTPS. O segundo usa a condição `s3:signatureAge`, a idade da assinatura em milissegundos, para recusar uploads assinados há mais de 10 minutos. Mesmo que um bug na API gere uma URL de upload com validade de um dia, ela para de funcionar em 10 minutos. A policy fica em `infra/s3/rango-fotos-policy.json`, com o nome do bucket trocado pelo seu:
 
 ```json
 {
@@ -286,18 +286,18 @@ aws s3api put-bucket-policy --bucket "$BUCKET" \
   --policy file://infra/s3/rango-fotos-policy.json
 ```
 
-O `"Principal": "*"` aqui é seguro porque o efeito é `Deny`: a regra vale para todo mundo, inclusive você, e só tira permissões. O Block Public Access só barra policies que concedem acesso público. Restringimos a idade da assinatura apenas no `PutObject` porque as URLs de leitura que a API vai gerar valem uma hora, e o navegador precisa delas durante todo esse tempo.
+O `"Principal": "*"` aqui é seguro porque o efeito é `Deny`: a regra vale para todo mundo, inclusive você, e só tira permissões. É o único asterisco que deixa o time de segurança dormir tranquilo. O Block Public Access só barra policies que concedem acesso público. Restringimos a idade da assinatura apenas no `PutObject` porque as URLs de leitura que a API vai gerar valem uma hora, e o navegador precisa delas durante todo esse tempo.
 
 ### Versionamento e lifecycle
 
-Ligue o versionamento:
+Primeiro, o versionamento é ligado:
 
 ```bash
 aws s3api put-bucket-versioning --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
 ```
 
-Agora veja o delete marker em ação. Sobrescreva a foto de teste, apague-a e liste as versões:
+Agora, o delete marker em ação. A sequência abaixo sobrescreve a foto de teste, apaga e lista as versões:
 
 ```bash
 aws s3 cp lasanha.jpg "s3://$BUCKET/teste/lasanha.jpg"
@@ -327,7 +327,7 @@ aws s3api list-object-versions --bucket "$BUCKET" --prefix teste/ \
 }
 ```
 
-A versão com `Id` `null` é a primeira foto, enviada antes de o versionamento ser ligado. A outra é a cópia que acabamos de subir. O marcador é o `rm`. A foto parece apagada (um `aws s3 ls` não mostra nada), mas as duas versões continuam lá. Para desfazer o `rm`, apague o marcador:
+A versão com `Id` `null` é a primeira foto, enviada antes de o versionamento ser ligado. A outra é a cópia que acabamos de subir. O marcador é o `rm`. A foto parece apagada (um `aws s3 ls` não mostra nada), mas as duas versões continuam lá. É o Ctrl+Z que a vida real nunca ofereceu. Desfazer o `rm` é apagar o marcador:
 
 ```bash
 aws s3api delete-object --bucket "$BUCKET" --key teste/lasanha.jpg \
@@ -335,7 +335,7 @@ aws s3api delete-object --bucket "$BUCKET" --key teste/lasanha.jpg \
 aws s3 ls "s3://$BUCKET/teste/"
 ```
 
-A foto voltou. Agora a lifecycle rule, para que esse histórico não cresça para sempre. Salve como `infra/s3/rango-fotos-lifecycle.json`:
+A foto voltou. Falta a lifecycle rule, para que esse histórico não cresça para sempre. Ela fica em `infra/s3/rango-fotos-lifecycle.json`:
 
 ```json
 {
@@ -357,11 +357,11 @@ aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" \
   --lifecycle-configuration file://infra/s3/rango-fotos-lifecycle.json
 ```
 
-A regra faz três coisas. Versões antigas somem 30 dias depois de deixarem de ser a atual, o que dá um mês para perceber e desfazer um erro. Delete markers que ficaram sozinhos, sem nenhuma versão embaixo, são removidos. E uploads em partes (*multipart uploads*) que começaram e nunca terminaram são abortados em 7 dias. Esse último item merece atenção: um único `PUT` aceita objetos de até 5 GB, e arquivos maiores são enviados em partes. Se o envio for interrompido, as partes já recebidas ficam guardadas, invisíveis no `aws s3 ls`, e cobradas todo mês.
+A regra faz três coisas. Versões antigas somem 30 dias depois de deixarem de ser a atual, o que dá um mês para perceber e desfazer um erro. Delete markers que ficaram sozinhos, sem nenhuma versão embaixo, são removidos. E uploads em partes (*multipart uploads*) que começaram e nunca terminaram são abortados em 7 dias. Esse último item merece atenção: um único `PUT` aceita objetos de até 5 GB, e arquivos maiores são enviados em partes. Se o envio for interrompido, as partes já recebidas ficam guardadas, invisíveis no `aws s3 ls`, e cobradas todo mês. São os fantasmas do bucket: ninguém vê, mas eles aparecem religiosamente na fatura.
 
 ### CORS: o navegador também precisa de permissão
 
-A API do Rangô já tem CORS configurado desde o capítulo 1. O bucket é outra origem, e o navegador vai fazer uma requisição *preflight* (`OPTIONS`) antes do `PUT`. Sem uma configuração de CORS no bucket, o upload falha no console do navegador com a mensagem `has been blocked by CORS policy`, mesmo com a URL assinada correta. Salve como `infra/s3/rango-fotos-cors.json`:
+A API do Rangô já tem CORS configurado desde o capítulo 1. O bucket é outra origem, e o navegador vai fazer uma requisição *preflight* (`OPTIONS`) antes do `PUT`. Sem uma configuração de CORS no bucket, o upload falha no console do navegador com a mensagem `has been blocked by CORS policy`, mesmo com a URL assinada correta. Se existisse um ranking de frases em inglês mais lidas por quem faz front-end, essa disputaria o primeiro lugar com "undefined is not a function". A configuração fica em `infra/s3/rango-fotos-cors.json`:
 
 ```json
 {
@@ -381,11 +381,11 @@ aws s3api put-bucket-cors --bucket "$BUCKET" \
   --cors-configuration file://infra/s3/rango-fotos-cors.json
 ```
 
-Só `PUT` e só a origem do front local. As fotos vão ser exibidas com a tag `<img>`, que não precisa de CORS para mostrar uma imagem. Quando o front tiver domínio próprio, no capítulo 14, a origem entra nesta lista.
+Só `PUT` e só a origem do front local. Lista de permissões curta é como lista de convidados de casamento pequeno: menos gente, menos confusão no final. As fotos vão ser exibidas com a tag `<img>`, que não precisa de CORS para mostrar uma imagem. Quando o front tiver domínio próprio, no capítulo 14, a origem entra nesta lista.
 
 ### Permissão para a role do servidor
 
-Quando a API rodar na EC2, quem assina as URLs é a role `rango-ec2` do capítulo 8. Ela precisa das ações que a API usa, e só no prefixo `fotos/`. Salve como `iam/rango-ec2-fotos.json`:
+Quando a API rodar na EC2, quem assina as URLs é a role `rango-ec2` do capítulo 8. Ela precisa das ações que a API usa, e só no prefixo `fotos/`. A policy fica em `iam/rango-ec2-fotos.json`:
 
 ```json
 {
@@ -401,7 +401,7 @@ Quando a API rodar na EC2, quem assina as URLs é a role `rango-ec2` do capítul
 }
 ```
 
-Criar policies é tarefa de IAM, e o `PowerUserAccess` do profile `rango-dev` não inclui IAM. Use o profile de administrador só para este comando:
+Criar policies é tarefa de IAM, e o `PowerUserAccess` do profile `rango-dev` não inclui IAM. O profile de administrador entra só neste comando:
 
 ```bash
 aws iam put-role-policy --profile rango-admin \
@@ -411,11 +411,11 @@ aws iam put-role-policy --profile rango-admin \
 
 Não incluímos `s3:ListBucket`. A API sempre sabe qual key quer, porque guarda as keys no Redis, e não precisa listar o bucket. Uma consequência curiosa: sem `ListBucket`, um `HEAD` numa key inexistente devolve 403 em vez de 404, para não revelar se o objeto existe. O código abaixo trata os dois casos do mesmo jeito.
 
-Uma presigned URL só funciona se quem a assinou tiver a permissão. Se a role não tiver `s3:PutObject`, a API gera a URL sem reclamar (é só um cálculo), e o erro aparece no navegador como `403 AccessDenied`.
+Uma presigned URL só funciona se quem a assinou tiver a permissão. Se a role não tiver `s3:PutObject`, a API gera a URL sem reclamar (é só um cálculo), e o erro aparece no navegador como `403 AccessDenied`. A API, nesse caso, é o amigo que passa o endereço da festa sem saber que você não foi convidado.
 
 ### A API: gerar, registrar e listar
 
-Acrescente `boto3` ao `backend/requirements.txt` e crie `backend/app/fotos.py`:
+O `boto3` entra no `backend/requirements.txt`, e o código fica em `backend/app/fotos.py`:
 
 ```python
 import os
@@ -494,7 +494,7 @@ def listar_fotos(restaurante: str = Restaurante):
     ]
 ```
 
-E registre o router no `backend/app/main.py`:
+O router é registrado no `backend/app/main.py`:
 
 ```python
 from app.fotos import router as fotos_router
@@ -504,17 +504,17 @@ app.include_router(fotos_router)
 
 Alguns detalhes desse código merecem comentário.
 
-O `ContentType` entra na assinatura. O navegador precisa enviar exatamente esse `Content-Type` no `PUT`, ou o S3 recusa. Isso impede que alguém peça uma URL para `image/jpeg` e suba um HTML no lugar, que depois seria servido com o tipo errado.
+O `ContentType` entra na assinatura. O navegador precisa enviar exatamente esse `Content-Type` no `PUT`, ou o S3 recusa. Isso impede que alguém peça uma URL para `image/jpeg` e suba um HTML no lugar, que depois seria servido com o tipo errado. Ninguém quer uma lasanha que, ao ser aberta, vira página de phishing.
 
 O padrão no parâmetro `restaurante` evita keys estranhas. Falta conferir se quem pede é dono do restaurante, checagem que entra quando o Rangô tiver login de restaurante: gerar uma presigned URL é conceder uma permissão.
 
 A configuração `request_checksum_calculation="when_required"` evita que as versões recentes do boto3, que calculam checksums de integridade por padrão, coloquem na assinatura algo que o `fetch` não vai enviar.
 
-Por fim, as keys ficam no Redis (`fotos:{restaurante}`), como os pedidos do capítulo 5. É o mesmo arranjo provisório. No próximo capítulo, os pedidos ganham um banco de verdade; o registro das fotos continua no Redis até o capítulo 24, quando a API passa a perguntar ao próprio bucket.
+Por fim, as keys ficam no Redis (`fotos:{restaurante}`), como os pedidos do capítulo 5. É o mesmo arranjo provisório, e todo mundo que trabalha com software sabe que nada dura tanto quanto uma solução provisória. No próximo capítulo, os pedidos ganham um banco de verdade; o registro das fotos continua no Redis até o capítulo 24, quando a API passa a perguntar ao próprio bucket.
 
-### O React: enviar direto para a AWS
+### O React: envio direto para a AWS
 
-Crie `frontend/src/EnviarFoto.tsx`:
+O componente fica em `frontend/src/EnviarFoto.tsx`:
 
 ```tsx
 import { useState, type ChangeEvent } from "react";
@@ -571,9 +571,9 @@ export function EnviarFoto({ restaurante }: { restaurante: string }) {
 
 O `body: arquivo` envia o `File` em binário, sem `FormData`, com o mesmo `Content-Type` usado na assinatura.
 
-### Rodar no Compose com as suas credenciais
+### O Compose com as suas credenciais
 
-Na EC2, o boto3 encontraria as credenciais da role sozinho. No Compose local, o container não tem credencial, então emprestamos a sessão SSO da sua máquina, montando o `~/.aws` como somente leitura. No `compose.yaml`, acrescente ao serviço `api` (e ao `api-canario`, se ele estiver ligado):
+Na EC2, o boto3 encontraria as credenciais da role sozinho. No Compose local, o container não tem credencial, então emprestamos a sessão SSO da sua máquina, montando o `~/.aws` como somente leitura. No `compose.yaml`, o serviço `api` (e o `api-canario`, se ele estiver ligado) ganha estas linhas:
 
 ```yaml
     image: rango-api:0.6.0
@@ -587,23 +587,23 @@ Na EC2, o boto3 encontraria as credenciais da role sozinho. No Compose local, o 
       - ~/.aws:/home/rango/.aws:ro
 ```
 
-O caminho `/home/rango` vem do `useradd --create-home rango` do Dockerfile. Esse volume serve só para a sua máquina; em produção, credencial vem da role, nunca de arquivo. Depois:
+O caminho `/home/rango` vem do `useradd --create-home rango` do Dockerfile. Esse volume serve só para a sua máquina; em produção, credencial vem da role, nunca de arquivo. Depois vêm o build e o Compose:
 
 ```bash
 docker build -t rango-api:0.6.0 backend
 docker compose up -d --scale api=3
 ```
 
-Coloque o `<EnviarFoto restaurante="cantina-da-nona" />` em alguma tela do `App.tsx`, abra `https://rango.test:5173` e envie a foto. Na aba Network do navegador você vai ver quatro requisições: o `POST` para a API, o `OPTIONS` e o `PUT` para `rango-fotos-pratos-...s3.amazonaws.com`, e o `POST` de registro. O `PUT` de 4 MB nunca passou pelo Nginx nem pelo Uvicorn. Confira pelo terminal:
+Com o `<EnviarFoto restaurante="cantina-da-nona" />` colocado em alguma tela do `App.tsx`, a foto é enviada pela página `https://rango.test:5173`. Na aba Network do navegador aparecem quatro requisições: o `POST` para a API, o `OPTIONS` e o `PUT` para `rango-fotos-pratos-...s3.amazonaws.com`, e o `POST` de registro. O `PUT` de 4 MB nunca passou pelo Nginx nem pelo Uvicorn, que seguiram a vida sem saber da lasanha. O terminal confirma:
 
 ```bash
 aws s3 ls "s3://$BUCKET/fotos/cantina-da-nona/"
 curl -s https://api.rango.test:8443/restaurantes/cantina-da-nona/fotos
 ```
 
-### Ver o erro antes do acerto
+### O erro antes do acerto
 
-Vale a pena quebrar o upload de propósito, para reconhecer a mensagem quando ela aparecer sem querer. Peça uma URL para `image/jpeg` e envie dizendo que é PNG:
+Vale a pena quebrar o upload de propósito, para reconhecer a mensagem quando ela aparecer sem querer. Quebrar de propósito é a única forma de quebrar que não termina em postmortem. O exemplo pede uma URL para `image/jpeg` e envia dizendo que é PNG:
 
 ```bash
 RESPOSTA=$(curl -s -X POST https://api.rango.test:8443/restaurantes/cantina-da-nona/fotos/upload-url \
@@ -619,11 +619,11 @@ curl -s -X PUT -H "Content-Type: image/png" --upload-file lasanha.jpg "$URL"
 does not match the signature you provided. Check your key and signing method.</Message>...
 ```
 
-Troque para `image/jpeg` e o mesmo comando devolve 200. `SignatureDoesNotMatch` quase sempre significa que a requisição usada é diferente da que foi assinada: outro método, outro cabeçalho, um proxy que mexeu em algo no caminho, ou o relógio da máquina que assinou fora de sincronia. Outro erro que você vai encontrar é `ExpiredToken`: a URL ainda estava no prazo, mas a credencial temporária que a assinou expirou. No desenvolvimento local, isso acontece quando a sessão SSO acaba; um `aws sso login` resolve.
+Com `image/jpeg`, o mesmo comando devolve 200. `SignatureDoesNotMatch` quase sempre significa que a requisição usada é diferente da que foi assinada: outro método, outro cabeçalho, um proxy que mexeu em algo no caminho, ou o relógio da máquina que assinou fora de sincronia. A criptografia, ao contrário de muita reunião, exige pontualidade. Outro erro que você vai encontrar é `ExpiredToken`: a URL ainda estava no prazo, mas a credencial temporária que a assinou expirou. No desenvolvimento local, isso acontece quando a sessão SSO acaba; um `aws sso login` resolve.
 
 ### O que fica ligado
 
-O bucket fica, porque é a casa das fotos do Rangô daqui em diante. O custo de algumas dezenas de MB é uma fração de centavo por mês. Apague a foto de teste e as versões dela, e derrube o Compose:
+O bucket fica, porque é a casa das fotos do Rangô daqui em diante. O custo de algumas dezenas de MB é uma fração de centavo por mês, menos do que a moeda de cinco centavos que ninguém mais aceita na padaria. A limpeza apaga a foto de teste e as versões dela, e derruba o Compose:
 
 ```bash
 aws s3 rm "s3://$BUCKET/teste/lasanha.jpg"
@@ -636,7 +636,7 @@ O `rm` só cria um delete marker, e a lifecycle rule limpa o resto em 30 dias. P
 
 > **Na vida real:** Em junho de 2017, Chris Vickery, pesquisador da UpGuard, encontrou um bucket do S3 aberto com dados de clientes da Verizon. O bucket pertencia à NICE Systems, fornecedora do call center da operadora, e continha nomes, endereços e PINs usados para confirmar a identidade do cliente por telefone. A UpGuard falou em 14 milhões de clientes; a Verizon, em cerca de 6 milhões. Bastava conhecer a URL para baixar os arquivos, e o bucket ficou aberto por mais de uma semana depois do aviso.
 
-O vazamento da Capital One, citado no capítulo 9, foi de outro tipo: nenhum bucket estava público, e o atacante usou credenciais de uma role com acesso a buckets demais. Por isso a `RangoFotos` dá acesso só ao prefixo `fotos/`.
+O vazamento da Capital One, citado no capítulo 9, foi de outro tipo: nenhum bucket estava público, e o atacante usou credenciais de uma role com acesso a buckets demais. Por isso a `RangoFotos` dá acesso só ao prefixo `fotos/`. Privilégio mínimo é como sal: ninguém elogia quando está na medida, todo mundo percebe quando passou da conta.
 
 > **Armadilha:** O Block Public Access do bucket pode ser desligado com um clique, e o console avisa, mas deixa. Ligue também o Block Public Access na conta (`aws s3control put-public-access-block --account-id ... --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`). Quando o Rangô precisar de um bucket realmente público, a resposta vai ser CloudFront com OAC, no capítulo 14, que serve o conteúdo sem abrir o bucket.
 
@@ -661,7 +661,7 @@ O vazamento da Capital One, citado no capítulo 9, foi de outro tipo: nenhum buc
 
 ## O banco que ninguém quer acordar para cuidar
 
-As fotos saíram do servidor. O próximo inquilino é bem mais delicado. No capítulo 10, o Postgres do Rangô rodou numa EC2 numa subnet privada, protegido por três camadas de rede. Só que alguém precisa rodar o `scripts/backup.sh` do capítulo 6 e guardar o dump em lugar seguro, aplicar o próximo patch do PostgreSQL 17 sem derrubar os pedidos e vigiar o disco do banco, que enche de madrugada do mesmo jeito que o das fotos encheu. E os pedidos continuam no Redis, esperando um banco de verdade. No próximo capítulo, o Amazon RDS assume essa rotina: backups automáticos com point-in-time recovery, uma réplica pronta em outra AZ e o banco do Rangô morando nas subnets privadas que construímos.
+As fotos saíram do servidor. O próximo inquilino é bem mais delicado. No capítulo 10, o Postgres do Rangô rodou numa EC2 numa subnet privada, protegido por três camadas de rede. Só que alguém precisa rodar o `scripts/backup.sh` do capítulo 6 e guardar o dump em lugar seguro, aplicar o próximo patch do PostgreSQL 17 sem derrubar os pedidos e vigiar o disco do banco, que enche de madrugada do mesmo jeito que o das fotos encheu (discos, por algum motivo, preferem encher às três da manhã de domingo). E os pedidos continuam no Redis, esperando um banco de verdade. No próximo capítulo, o Amazon RDS assume essa rotina: backups automáticos com point-in-time recovery, uma réplica pronta em outra AZ e o banco do Rangô morando nas subnets privadas que construímos.
 
 ## Referências
 

@@ -8,7 +8,8 @@
 - **Direto ao ponto.** Nada de introdução genérica do tipo "No mundo atual da tecnologia...". Cada parágrafo precisa entregar algo.
 - **Preciso e rigoroso.** A fluidez nunca sacrifica a exatidão técnica.
 - **Envolvente.** Cada seção deve deixar uma pergunta no ar ou uma recompensa logo à frente. O leitor não pode ter sono. O interesse vem de boas histórias, problemas concretos e revelações.
-- Bom humor é permitido de forma **leve e pontual**, por meio de situações e ironia sutil (o deploy de sexta-feira, a fatura inesperada). Nunca com gíria ou piada forçada.
+- **Engraçado de verdade.** O livro é um livro de humor tecnicamente preciso: o leitor deve rir de fato enquanto aprende. Vale todo tipo de piada (de tiozão, autodepreciativa, ácida, piadas clássicas de programador, ironia com a cultura dev e com a própria AWS), sem gíria e sem piada sobre grupos de pessoas. Não é piada o tempo todo: em média uma ou duas por seção, e o resumo e as referências ficam sem humor. A piada nunca altera, contradiz ou acrescenta fato técnico; se ela cita um fato real (história, etimologia, incidente), ele precisa estar correto.
+- **Código e comandos são exemplos para ler.** Muitos leitores só leem o código, sem executar. O texto não manda o leitor rodar nada ("abra", "suba", "rode", "crie o arquivo", "teste"); ele narra o que acontece ("com o backend rodando, o sistema mostra...", "no exemplo, a resposta é...", "a correção é um arquivo..."). As saídas esperadas aparecem sempre, para que tudo seja entendido só lendo. Títulos de seção descritivos, não no imperativo.
 
 ## Faça
 

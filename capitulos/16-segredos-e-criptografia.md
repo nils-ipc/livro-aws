@@ -4,13 +4,13 @@ No capítulo anterior, o Rangô inteiro virou código. A stack `RangoProducao` c
 
 ## Onde mora a senha do banco
 
-Faça um exercício rápido. Liste todos os lugares onde a senha do usuário `rango` está escrita hoje.
+Vale um exercício rápido: listar todos os lugares onde a senha do usuário `rango` está escrita hoje.
 
-O primeiro você conhece: o `/etc/rango/api.env` da AMI `rango-api-20261015`, na linha `PGPASSWORD=`. Quem pode lançar uma instância dessa AMI lê o arquivo, e cada cópia da AMI leva a senha junto.
+O primeiro você conhece: o `/etc/rango/api.env` da AMI `rango-api-20261015`, na linha `PGPASSWORD=`. Quem pode lançar uma instância dessa AMI lê o arquivo, e cada cópia da AMI leva a senha junto. É uma senha que viaja mais do que muito diretor comercial.
 
-O segundo está no Slack. Em março, o Bruno precisava rodar uma consulta para conferir os pedidos de um restaurante, e alguém colou a senha na conversa "só desta vez". A mensagem está lá, indexada pela busca do Slack, visível para quem entrar no canal depois.
+O segundo está no Slack. Em março, o Bruno precisava rodar uma consulta para conferir os pedidos de um restaurante, e alguém colou a senha na conversa "só desta vez". A mensagem está lá, indexada pela busca do Slack, visível para quem entrar no canal depois. "Só desta vez" é a expressão mais duradoura da língua portuguesa: tudo o que foi feito só desta vez continua lá, anos depois.
 
-O terceiro está no git. Rode isto na raiz do repositório:
+O terceiro está no git. Na raiz do repositório, uma busca no histórico mostra:
 
 ```bash
 git log -S 'PGPASSWORD' --oneline --all
@@ -22,29 +22,29 @@ git log -S 'PGPASSWORD' --oneline --all
 a12d6c0 testes locais contra o RDS
 ```
 
-O `-S` procura commits que adicionaram ou removeram aquele texto. O commit `a12d6c0` trouxe um `backend/.env` com a senha de produção para testar contra o RDS, e o `3f09b7d` apagou o arquivo. Apagar num commit novo deixa a senha intacta no histórico: basta um `git show a12d6c0:backend/.env` para ler. E cada pessoa que clonou o repositório nesse intervalo tem uma cópia.
+O `-S` procura commits que adicionaram ou removeram aquele texto. O commit `a12d6c0` trouxe um `backend/.env` com a senha de produção para testar contra o RDS, e o `3f09b7d` apagou o arquivo. Apagar num commit novo deixa a senha intacta no histórico: basta um `git show a12d6c0:backend/.env` para ler. E cada pessoa que clonou o repositório nesse intervalo tem uma cópia. O git tem memória de elefante e discrição nenhuma.
 
-Nenhum desses lugares tem controle de acesso pensado para uma senha de produção, e nenhum registra quem leu. Trocar a senha exigiria mexer na AMI e caçar cada cópia. Na prática, ela nunca vai ser trocada, e dá acesso de leitura e escrita a todos os pedidos do Rangô.
+Nenhum desses lugares tem controle de acesso pensado para uma senha de produção, e nenhum registra quem leu. Trocar a senha exigiria mexer na AMI e caçar cada cópia. Na prática, ela nunca vai ser trocada (senha que ninguém sabe onde está escrita vira senha vitalícia), e dá acesso de leitura e escrita a todos os pedidos do Rangô.
 
 > **Na vida real:** Em outubro de 2022, a Toyota informou que uma empresa contratada tinha publicado, em dezembro de 2017, parte do código do T-Connect num repositório público do GitHub. Nesse código estava uma chave de acesso ao servidor de dados, escrita direto no código-fonte. A chave ficou exposta até 15 de setembro de 2022, quase cinco anos, e dava acesso a dados de cerca de 296 mil clientes (e-mails e números de controle). A Toyota trocou as chaves dois dias depois. Disse não ter evidência de acesso de terceiros, sem poder descartar a hipótese. Repare na ordem dos fatos: a chave só mudou quando alguém a encontrou.
 
-O capítulo 6 já deu a regra: segredo fica fora do código e da imagem, separado por ambiente, e gira de tempos em tempos. No Compose, isso virou um arquivo em `secrets/` fora do git. Na AWS, a pergunta é onde o segredo fica e como a instância, que nasce sozinha às três da manhã numa subnet privada, chega até ele.
+O capítulo 6 já deu a regra: segredo fica fora do código e da imagem, separado por ambiente, e gira de tempos em tempos. No Compose, isso virou um arquivo em `secrets/` fora do git. Na AWS, a pergunta é onde o segredo fica e como a instância, que nasce sozinha às três da manhã numa subnet privada, chega até ele sem ninguém acordado para ajudar.
 
 ## Configuração, segredo e chave
 
-Antes dos serviços, vale separar três coisas que costumam morar juntas no mesmo `.env`.
+Antes dos serviços, vale separar três coisas que costumam morar juntas no mesmo `.env`, numa convivência tão pacífica quanto a de três colegas dividindo uma república com uma geladeira só.
 
 **Configuração** é o que muda entre ambientes e pode ser lido sem estrago: o endereço do cache, o nome do bucket de fotos, as origens do CORS. Se vazar, ninguém ganha acesso a nada.
 
-**Segredo** é o que dá acesso a alguma coisa: a senha do banco, a chave da API de pagamento, o token de um webhook. Se vazar, alguém entra.
+**Segredo** é o que dá acesso a alguma coisa: a senha do banco, a chave da API de pagamento, o token de um webhook. Se vazar, alguém entra. Uma régua prática: configuração pode aparecer no slide da reunião com o cliente; segredo não aparece nem em compartilhamento de tela por engano.
 
-**Chave criptográfica** é o que transforma dados legíveis em ilegíveis e vice-versa. Ela protege os segredos e os dados guardados em disco.
+**Chave criptográfica** é o que transforma dados legíveis em ilegíveis e vice-versa. Ela protege os segredos e os dados guardados em disco. É o segredo que guarda os outros segredos, a matrioska do mundo da segurança.
 
-A AWS tem um serviço para cada uma. O AWS Systems Manager Parameter Store guarda configuração (e segredos simples). O AWS Secrets Manager guarda segredos e sabe trocá-los sozinho. O AWS Key Management Service (KMS) guarda as chaves que cifram os outros dois, e quase tudo o mais na conta.
+A AWS tem um serviço para cada uma, o que, para os padrões da AWS, é uma economia admirável de serviços. O AWS Systems Manager Parameter Store guarda configuração (e segredos simples). O AWS Secrets Manager guarda segredos e sabe trocá-los sozinho. O AWS Key Management Service (KMS) guarda as chaves que cifram os outros dois, e quase tudo o mais na conta.
 
 ### Parameter Store
 
-O Parameter Store é um dicionário de chave e valor dentro do Systems Manager, o mesmo serviço do Session Manager do capítulo 9. Você já usou um parâmetro dele sem perceber: o `resolve:ssm:` que buscava o ID da AMI mais recente do Amazon Linux 2023 apontava para um parâmetro público mantido pela AWS.
+O Parameter Store é um dicionário de chave e valor dentro do Systems Manager, o mesmo serviço do Session Manager do capítulo 9. Você já usou um parâmetro dele sem perceber: o `resolve:ssm:` que buscava o ID da AMI mais recente do Amazon Linux 2023 apontava para um parâmetro público mantido pela AWS. Era o Parameter Store fazendo o seu trabalho em silêncio, como aquele colega que resolve tudo e nunca aparece nas reuniões de resultado.
 
 Os nomes seguem uma hierarquia com barras, como caminhos de arquivo:
 
@@ -55,35 +55,35 @@ Os nomes seguem uma hierarquia com barras, como caminhos de arquivo:
 /rango/homologacao/redis_url
 ```
 
-A hierarquia serve para duas coisas. Uma chamada `GetParametersByPath` com `/rango/producao/` devolve todos os parâmetros daquele ambiente de uma vez, como um `os.environ` remoto filtrado por prefixo. E uma policy IAM pode liberar só `/rango/producao/*` para a role de produção, sem que ela enxergue a homologação.
+A hierarquia serve para duas coisas. Uma chamada `GetParametersByPath` com `/rango/producao/` devolve todos os parâmetros daquele ambiente de uma vez, como um `os.environ` remoto filtrado por prefixo. E uma policy IAM pode liberar só `/rango/producao/*` para a role de produção, sem que ela enxergue a homologação. Cada ambiente com a sua gaveta, e ninguém mexe na gaveta do outro.
 
 Cada parâmetro tem um tipo. `String` é texto puro. `StringList` é uma lista separada por vírgulas. `SecureString` é texto cifrado com uma chave do KMS: o valor é guardado cifrado, e quem lê precisa de permissão no parâmetro e na chave.
 
-Existem dois *tiers*, escolhidos por parâmetro. No standard, que é o padrão, você tem até 10.000 parâmetros por conta e região, valores de até 4 KB e nenhum custo de armazenamento. No advanced, o limite sobe para 100.000 parâmetros e 8 KB por valor, e aparecem recursos como políticas de expiração e compartilhamento com outras contas, com cobrança por parâmetro por mês e por chamada de API. Dá para promover um parâmetro de standard para advanced, mas nunca o caminho inverso; para voltar, só apagando e criando de novo. O Rangô cabe com folga no standard. A taxa de requisições é outra configuração, por conta e região, chamada *higher throughput*; quando ligada, cobra cada parâmetro lido, em qualquer tier.
+Existem dois *tiers*, escolhidos por parâmetro. No standard, que é o padrão, você tem até 10.000 parâmetros por conta e região, valores de até 4 KB e nenhum custo de armazenamento. No advanced, o limite sobe para 100.000 parâmetros e 8 KB por valor, e aparecem recursos como políticas de expiração e compartilhamento com outras contas, com cobrança por parâmetro por mês e por chamada de API. Dá para promover um parâmetro de standard para advanced, mas nunca o caminho inverso; para voltar, só apagando e criando de novo. Funciona como plano de celular: subir é um clique, descer é uma saga. O Rangô cabe com folga no standard. A taxa de requisições é outra configuração, por conta e região, chamada *higher throughput*; quando ligada, cobra cada parâmetro lido, em qualquer tier.
 
 ### Secrets Manager
 
 O Secrets Manager guarda segredos de forma parecida, com três diferenças que importam.
 
-A primeira é a rotação automática. Você associa ao segredo uma função AWS Lambda e uma agenda, e o Secrets Manager chama essa função para gerar uma senha nova, aplicá-la no banco, testá-la e só então marcá-la como a atual. É um gerenciador de senhas com um cron.
+A primeira é a rotação automática. Você associa ao segredo uma função AWS Lambda e uma agenda, e o Secrets Manager chama essa função para gerar uma senha nova, aplicá-la no banco, testá-la e só então marcá-la como a atual. É um gerenciador de senhas com um cron, e o pior inimigo do post-it amarelo colado no monitor.
 
-A segunda são as versões com rótulos, os *staging labels*. Cada troca cria uma versão nova do segredo, e os rótulos dizem o papel de cada uma: `AWSCURRENT` é a que a aplicação deve usar, `AWSPENDING` é a que está sendo criada durante uma rotação, e `AWSPREVIOUS` é a anterior, guardada para emergências. Quem lê o segredo sem pedir versão recebe a `AWSCURRENT`.
+A segunda são as versões com rótulos, os *staging labels*. Cada troca cria uma versão nova do segredo, e os rótulos dizem o papel de cada uma: `AWSCURRENT` é a que a aplicação deve usar, `AWSPENDING` é a que está sendo criada durante uma rotação, e `AWSPREVIOUS` é a anterior, guardada para emergências, como o estepe no porta-malas. Quem lê o segredo sem pedir versão recebe a `AWSCURRENT`.
 
-A terceira é o preço. Cada segredo custa cerca de US$ 0,40 por mês, mais US$ 0,05 a cada 10.000 chamadas de API (valores de referência da página oficial em outubro de 2026; a página não indica região, então confirme na calculadora de preços). A rotação não tem taxa própria: criar versões novas é grátis, e as chamadas que a função de rotação faz entram como chamadas comuns. Somam-se só as invocações da Lambda, que numa rotação mensal ficam em frações de centavo.
+A terceira é o preço, e aqui a fatura da AWS mostra o seu lado mais generoso. Cada segredo custa cerca de US$ 0,40 por mês, mais US$ 0,05 a cada 10.000 chamadas de API (valores de referência da página oficial em outubro de 2026; a página não indica região, então confirme na calculadora de preços). A rotação não tem taxa própria: criar versões novas é grátis, e as chamadas que a função de rotação faz entram como chamadas comuns. Somam-se só as invocações da Lambda, que numa rotação mensal ficam em frações de centavo.
 
 Você já tem um segredo lá. No capítulo 12, a senha mestre do `rango_admin` foi para o Secrets Manager, e no capítulo 15 o CDK passou a gerá-la com `from_generated_secret`. O que falta é o usuário da aplicação.
 
 ### Rotação sem derrubar ninguém
 
-Trocar a senha de um banco em uso tem um problema de tempo. A aplicação abriu conexões com a senha antiga e guardou essa senha para abrir as próximas. No instante em que a senha muda no banco, toda conexão nova falha até a aplicação descobrir a senha nova. É o mesmo problema de trocar a fechadura da casa com a família inteira na rua.
+Trocar a senha de um banco em uso tem um problema de tempo. A aplicação abriu conexões com a senha antiga e guardou essa senha para abrir as próximas. No instante em que a senha muda no banco, toda conexão nova falha até a aplicação descobrir a senha nova. É o mesmo problema de trocar a fechadura da casa com a família inteira na rua. Alguém sempre volta da padaria e fica do lado de fora, segurando o pão e uma chave que não serve mais.
 
 O Secrets Manager oferece duas estratégias para bancos.
 
-Na **rotação de usuário único**, a função troca a senha do próprio `rango`. É simples, e existe uma janela, de segundos, em que o banco já aceita só a senha nova e parte da aplicação ainda usa a antiga.
+Na **rotação de usuário único**, a função troca a senha do próprio `rango`. É simples, e existe uma janela, de segundos, em que o banco já aceita só a senha nova e parte da aplicação ainda usa a antiga. Segundos parecem pouco até que alguém, nesses segundos, esteja pagando um pedido.
 
-Na **rotação de usuários alternados** (*multi-user*), existem dois usuários com as mesmas permissões, e a função alterna entre eles. No PostgreSQL, a primeira rotação cria o `rango_clone` com senha nova e roda `GRANT rango TO rango_clone`, o que faz o clone herdar tudo o que o `rango` pode fazer. A `AWSCURRENT` passa a apontar para o clone. Na rotação seguinte, quem ganha senha nova é o `rango`, e a `AWSCURRENT` volta para ele. Enquanto isso, a senha anterior continua valendo: quem leu o segredo antes da rotação segue conectando até a rotação seguinte. Para trocar a senha mestre e criar o clone, a função usa o segredo do `rango_admin`.
+Na **rotação de usuários alternados** (*multi-user*), existem dois usuários com as mesmas permissões, e a função alterna entre eles. No PostgreSQL, a primeira rotação cria o `rango_clone` com senha nova e roda `GRANT rango TO rango_clone`, o que faz o clone herdar tudo o que o `rango` pode fazer. É o gêmeo idêntico que assume o turno enquanto o outro vai trocar de senha. A `AWSCURRENT` passa a apontar para o clone. Na rotação seguinte, quem ganha senha nova é o `rango`, e a `AWSCURRENT` volta para ele. Enquanto isso, a senha anterior continua valendo: quem leu o segredo antes da rotação segue conectando até a rotação seguinte. Para trocar a senha mestre e criar o clone, a função usa o segredo do `rango_admin`.
 
-O Rangô vai usar a rotação de usuários alternados, a cada 30 dias. A agenda aceita expressões `rate()` em horas ou dias, com mínimo de 4 horas, ou `cron()` para escolher uma janela fina. Os horários são sempre em UTC.
+O Rangô vai usar a rotação de usuários alternados, a cada 30 dias. A agenda aceita expressões `rate()` em horas ou dias, com mínimo de 4 horas, ou `cron()` para escolher uma janela fina. Os horários são sempre em UTC, o fuso horário de ninguém, que garante pelo menos uma conta errada de três horas por ano em qualquer time brasileiro.
 
 ### Qual dos dois
 
@@ -96,19 +96,19 @@ O Rangô vai usar a rotação de usuários alternados, a cada 30 dias. A agenda 
 | Versões | Histórico de versões | Versões com `AWSCURRENT`/`AWSPREVIOUS` |
 | Criado pelo CloudFormation | `String` e `StringList`, sem `SecureString` | Sim, com valor gerado |
 
-O padrão do Rangô é o Parameter Store, que é mais simples e não cobra por parâmetro no tier standard. Configuração vai para lá como `String`. Um segredo de terceiro que você nunca consegue girar sozinho, como a chave de um parceiro que só muda por e-mail, fica num `SecureString`, criado pela CLI. O Secrets Manager é a exceção, reservada para o segredo que precisa de rotação automática gerenciada, como a senha do banco: o Parameter Store não tem rotação nativa, e refazer a alternância de usuários com uma Lambda e um agendamento próprios custaria bem mais que os US$ 0,40 por mês do segredo.
+O padrão do Rangô é o Parameter Store, que é mais simples e não cobra por parâmetro no tier standard. Em arquitetura, como em restaurante, o prato do dia resolve a maior parte dos pedidos. Configuração vai para lá como `String`. Um segredo de terceiro que você nunca consegue girar sozinho, como a chave de um parceiro que só muda por e-mail, fica num `SecureString`, criado pela CLI. O Secrets Manager é a exceção, reservada para o segredo que precisa de rotação automática gerenciada, como a senha do banco: o Parameter Store não tem rotação nativa, e refazer a alternância de usuários com uma Lambda e um agendamento próprios custaria bem mais que os US$ 0,40 por mês do segredo, sem contar as horas de quem iria manter essa Lambda caseira para sempre.
 
 ## KMS: quem guarda a chave
 
 O Secrets Manager guarda o segredo cifrado. Cifrado com qual chave? E onde fica essa chave?
 
-Se a chave ficasse num arquivo ao lado dos dados, a criptografia serviria só de enfeite. Quem rouba o disco rouba a chave junto. O KMS existe para que a chave nunca fique ao lado de nada. As chaves do KMS vivem em módulos de hardware de segurança (HSMs) operados pela AWS e nunca saem de lá em texto puro. Você nunca recebe a chave. Você manda os dados, e o KMS devolve o resultado.
+Se a chave ficasse num arquivo ao lado dos dados, a criptografia serviria só de enfeite. Quem rouba o disco rouba a chave junto. É a chave debaixo do tapete da porta, em versão digital. O KMS existe para que a chave nunca fique ao lado de nada. As chaves do KMS vivem em módulos de hardware de segurança (HSMs) operados pela AWS e nunca saem de lá em texto puro. Você nunca recebe a chave. Você manda os dados, e o KMS devolve o resultado.
 
-Pense no gerente do banco que guarda a chave do cofre: ele confere seu documento (o IAM), abre o cofre e anota o pedido no livro de registro (o AWS CloudTrail, do capítulo 23).
+Pense no gerente do banco que guarda a chave do cofre: ele confere seu documento (o IAM), abre o cofre e anota o pedido no livro de registro (o AWS CloudTrail, do capítulo 23). Um gerente que nunca entra de férias, nunca esquece a chave em casa e nunca aceita um "é rapidinho, depois eu assino".
 
 ### Envelope encryption
 
-Mandar cada byte para o KMS cifrar não funciona para um arquivo de 2 GB. A operação `Encrypt` aceita no máximo 4 KB, e cada chamada atravessa a rede. A solução tem nome: *envelope encryption*.
+Mandar cada byte para o KMS cifrar não funciona para um arquivo de 2 GB. A operação `Encrypt` aceita no máximo 4 KB, e cada chamada atravessa a rede. Seria como mandar cada página de um livro, uma por vez, ao cartório para autenticar. A solução tem nome: *envelope encryption*.
 
 O fluxo para cifrar é este:
 
@@ -121,27 +121,27 @@ Para decifrar, a aplicação manda a data key cifrada ao KMS com `Decrypt`, rece
 
 É como fechar uma caixa com um cadeado comum e guardar a chave do cadeado num envelope lacrado que só o gerente do banco abre. A caixa pode ficar em qualquer lugar. Sem o gerente, ninguém abre o envelope.
 
-Quase todo serviço da AWS que diz "cifrado com KMS" funciona assim por baixo. O volume EBS cifrado do capítulo 9, o RDS, o Secrets Manager e o S3 com SSE-KMS geram data keys e guardam a versão cifrada junto dos dados. O KMS só entra em cena para abrir a data key, e o trabalho pesado acontece na máquina.
+Quase todo serviço da AWS que diz "cifrado com KMS" funciona assim por baixo. O volume EBS cifrado do capítulo 9, o RDS, o Secrets Manager e o S3 com SSE-KMS geram data keys e guardam a versão cifrada junto dos dados. O KMS só entra em cena para abrir a data key, e o trabalho pesado acontece na máquina. É a agência dos Correios mais movimentada que você nunca viu.
 
 ### Chaves da AWS e chaves suas
 
 No KMS existem dois tipos de chave que você vai encontrar.
 
-As **chaves gerenciadas pela AWS** têm nomes como `aws/secretsmanager`, `aws/ssm`, `aws/rds` e `aws/ebs`. Cada serviço cria a sua na primeira vez que precisa. Elas não cobram armazenamento, giram sozinhas uma vez por ano, e você não consegue mudar a policy delas nem desligar a rotação. Qualquer um na conta que tenha permissão no serviço consegue usá-las por meio dele.
+As **chaves gerenciadas pela AWS** têm nomes como `aws/secretsmanager`, `aws/ssm`, `aws/rds` e `aws/ebs`. Cada serviço cria a sua na primeira vez que precisa. Elas não cobram armazenamento, giram sozinhas uma vez por ano, e você não consegue mudar a policy delas nem desligar a rotação. São como apartamento alugado mobiliado: tudo funciona, mas ninguém deixa você trocar o sofá. Qualquer um na conta que tenha permissão no serviço consegue usá-las por meio dele.
 
 As **chaves gerenciadas pelo cliente** (*customer managed keys*) são criadas por você. Custam US$ 1 por mês cada uma, proporcional por hora, e as requisições custam cerca de US$ 0,03 a cada 10.000, com 20.000 requisições grátis por mês (referência de outubro de 2026). Em troca, você controla a *key policy*, que é uma policy baseada em recurso como a bucket policy do capítulo 11: ela decide quem pode cifrar, decifrar ou administrar a chave, independente das permissões no serviço que usa a chave.
 
-Essa independência é o motivo para pagar o dólar. Com uma chave sua, ler um segredo exige duas permissões: `secretsmanager:GetSecretValue` no segredo e `kms:Decrypt` na chave. Alguém que ganhe acesso amplo ao Secrets Manager por engano continua sem conseguir abrir o que foi cifrado com ela. É uma segunda tranca, controlada num lugar diferente.
+Essa independência é o motivo para pagar o dólar. Com uma chave sua, ler um segredo exige duas permissões: `secretsmanager:GetSecretValue` no segredo e `kms:Decrypt` na chave. Alguém que ganhe acesso amplo ao Secrets Manager por engano continua sem conseguir abrir o que foi cifrado com ela. É uma segunda tranca, controlada num lugar diferente. Quem já perdeu as chaves de casa sabe que duas trancas irritam; quem já foi assaltado sabe por que elas existem.
 
 A rotação automática de uma chave sua vem desligada e você liga com uma chamada. O período padrão é de 365 dias e pode ser configurado. Rotacionar uma chave do KMS cria material criptográfico novo, mas mantém o antigo guardado: dados cifrados há três anos continuam decifráveis, sem você recifrar nada. O ID e o ARN da chave não mudam. A cobrança sobe US$ 1 por mês na primeira rotação e mais US$ 1 na segunda, e depois para de subir. Fora da agenda, a rotação sob demanda permite até 25 rotações por chave. A rotação automática só existe para chaves simétricas de criptografia, as deste livro.
 
-Apagar uma chave tem um freio. O `ScheduleKeyDeletion` coloca a chave em `PendingDeletion` por 7 a 30 dias (padrão de 30), período em que ela fica desabilitada e não cobra armazenamento. Até o prazo acabar, um `CancelKeyDeletion` desfaz tudo. Depois, todo dado cifrado com aquela chave vira ruído para sempre.
+Apagar uma chave tem um freio. O `ScheduleKeyDeletion` coloca a chave em `PendingDeletion` por 7 a 30 dias (padrão de 30), período em que ela fica desabilitada e não cobra armazenamento. Até o prazo acabar, um `CancelKeyDeletion` desfaz tudo. Depois, todo dado cifrado com aquela chave vira ruído para sempre. Nem o suporte da AWS nem o sobrinho que entende de computador conseguem trazer de volta.
 
-## Mão na massa: o Rangô sem senha em arquivo
+## Na prática: o Rangô sem senha em arquivo
 
-O plano tem cinco partes. Uma chave do KMS para os segredos do Rangô. Um segredo novo para o usuário `rango`, com rotação de usuários alternados. A configuração não secreta no Parameter Store, separada por ambiente. Os VPC endpoints para que as instâncias, nas subnets isoladas, alcancem os dois serviços. E um user data que monta o `api.env` a cada instância nova, a partir do que está na AWS.
+O código, os comandos e as saídas aparecem por inteiro, para que tudo possa ser acompanhado só lendo. O plano tem cinco partes. Uma chave do KMS para os segredos do Rangô. Um segredo novo para o usuário `rango`, com rotação de usuários alternados. A configuração não secreta no Parameter Store, separada por ambiente. Os VPC endpoints para que as instâncias, nas subnets isoladas, alcancem os dois serviços. E um user data que monta o `api.env` a cada instância nova, a partir do que está na AWS.
 
-A senha que vazou não vai ser copiada para lugar nenhum. Ela vai morrer na segunda rotação.
+A senha que vazou não vai ser copiada para lugar nenhum. Ela vai morrer na segunda rotação, e ninguém vai precisar de atestado de óbito: o banco simplesmente para de reconhecê-la.
 
 ### Pré-requisitos
 
@@ -171,7 +171,7 @@ RangoInfraStack(
 )
 ```
 
-Troque o nome do snapshot pelo seu. Em `rango_infra/rango_infra_stack.py`, acrescente os imports e o parâmetro:
+Numa conta real, o nome do snapshot é o que o `describe-db-snapshots` mostrar. Em `rango_infra/rango_infra_stack.py`, entram os imports e o parâmetro:
 
 ```python
 from pathlib import Path
@@ -223,9 +223,9 @@ Logo depois da criação do cache, entram a chave e os endpoints:
         )
 ```
 
-A chave tem rotação anual ligada. O `removal_policy=RemovalPolicy.DESTROY` com `pending_window` de 7 dias faz o `cdk destroy` agendar a exclusão com a janela mínima, em vez de deixar a chave cobrando para sempre. Numa chave que protege dados que precisam sobreviver à stack, o certo é o padrão do CDK, que mantém a chave. Aqui ela protege só o segredo, que é apagado junto.
+A chave tem rotação anual ligada. O `removal_policy=RemovalPolicy.DESTROY` com `pending_window` de 7 dias faz o `cdk destroy` agendar a exclusão com a janela mínima, em vez de deixar a chave cobrando para sempre. Numa chave que protege dados que precisam sobreviver à stack, o certo é o padrão do CDK, que mantém a chave. Aqui ela protege só o segredo, que é apagado junto. Chave sem nada para abrir é chaveiro de lembrancinha de viagem: bonito e inútil.
 
-Os endpoints resolvem um problema que você descobriria do jeito difícil. As instâncias da API estão em subnets `PRIVATE_ISOLATED`, sem rota para a internet, e as APIs do Parameter Store e do Secrets Manager são endereços públicos. Sem os endpoints, o primeiro comando do user data ficaria preso tentando conectar em `ssm.us-east-1.amazonaws.com` até estourar o tempo. Os *interface endpoints* do capítulo 10 colocam uma interface de rede desses serviços dentro das suas subnets, e o DNS privado da VPC faz o nome público apontar para ela. O código da instância não muda nada.
+Os endpoints resolvem um problema que você descobriria do jeito difícil, ou seja, com um timeout silencioso num domingo à noite e um log que termina no meio da frase. As instâncias da API estão em subnets `PRIVATE_ISOLATED`, sem rota para a internet, e as APIs do Parameter Store e do Secrets Manager são endereços públicos. Sem os endpoints, o primeiro comando do user data ficaria preso tentando conectar em `ssm.us-east-1.amazonaws.com` até estourar o tempo. Os *interface endpoints* do capítulo 10 colocam uma interface de rede desses serviços dentro das suas subnets, e o DNS privado da VPC faz o nome público apontar para ela. O código da instância não muda nada.
 
 O preço é o do capítulo 10: cerca de US$ 0,01 por hora por endpoint por AZ, mais o tráfego. Dois serviços em duas AZs dão perto de US$ 29 por mês (us-east-1, outubro de 2026), ainda menos que dois NAT Gateways. O L2 cria para cada endpoint um Security Group que aceita a porta 443 vindo da VPC.
 
@@ -249,11 +249,11 @@ O preço é o do capítulo 10: cerca de US$ 0,01 por hora por endpoint por AZ, m
         )
 ```
 
-O `DatabaseSecret` gera uma senha aleatória para o usuário `rango` e guarda um JSON com `username` e `password`, cifrado com a chave nova. O `master_secret` acrescenta o campo `masterarn`, que diz à função de rotação onde está a senha do `rango_admin`. O `.attach(db)` completa o JSON com `host`, `port` e `engine`, os campos que a função usa para encontrar o banco. Por padrão, o CDK exclui da senha gerada caracteres que costumam quebrar URLs e shells, como aspas, `@`, `/` e `$`.
+O `DatabaseSecret` gera uma senha aleatória para o usuário `rango` e guarda um JSON com `username` e `password`, cifrado com a chave nova. O `master_secret` acrescenta o campo `masterarn`, que diz à função de rotação onde está a senha do `rango_admin`. O `.attach(db)` completa o JSON com `host`, `port` e `engine`, os campos que a função usa para encontrar o banco. Por padrão, o CDK exclui da senha gerada caracteres que costumam quebrar URLs e shells, como aspas, `@`, `/` e `$`. Uma senha com aspas dentro de uma URL dentro de um shell rende um dia inteiro de depuração e um desabafo no canal do time.
 
-O `add_rotation_multi_user` monta o resto: uma função Lambda de rotação, publicada pela AWS no Serverless Application Repository, dentro das subnets privadas; um Security Group para ela, com a regra de entrada na porta 5432 do banco; as permissões de leitura e escrita no segredo e de leitura no segredo mestre; e a agenda de 30 dias. O `rotate_immediately_on_update`, que não aparece porque o padrão já é `True`, faz a primeira rotação acontecer assim que a agenda é criada.
+O `add_rotation_multi_user` monta o resto: uma função Lambda de rotação, publicada pela AWS no Serverless Application Repository, dentro das subnets privadas; um Security Group para ela, com a regra de entrada na porta 5432 do banco; as permissões de leitura e escrita no segredo e de leitura no segredo mestre; e a agenda de 30 dias. O `rotate_immediately_on_update`, que não aparece porque o padrão já é `True`, faz a primeira rotação acontecer assim que a agenda é criada. A Lambda mal nasce e já vai trabalhar, sem nem uma semana de integração.
 
-Repare que a senha gerada nesse momento é inútil: o `rango` do snapshot continua com a senha antiga. A primeira rotação cria o `rango_clone` e passa a `AWSCURRENT` para ele. A senha vazada só muda na segunda rotação, quando chega a vez do `rango`. Vamos forçar essa segunda logo depois do deploy.
+A senha gerada nesse momento é inútil: o `rango` do snapshot continua com a senha antiga. A primeira rotação cria o `rango_clone` e passa a `AWSCURRENT` para ele. A senha vazada só muda na segunda rotação, quando chega a vez do `rango`. Vamos forçar essa segunda logo depois do deploy.
 
 ### A configuração por ambiente
 
@@ -279,15 +279,15 @@ Repare que a senha gerada nesse momento é inútil: o `rango` do snapshot contin
         ]
 ```
 
-Cada entrada do dicionário vira um parâmetro `String` no tier standard. Os endpoints do banco e do cache continuam chegando por tokens, como no capítulo 15, e agora vão para o Parameter Store em vez de entrar num `sed`.
+Cada entrada do dicionário vira um parâmetro `String` no tier standard. Os endpoints do banco e do cache continuam chegando por tokens, como no capítulo 15, e agora vão para o Parameter Store em vez de entrar num `sed`. O `sed` do capítulo anterior pode, finalmente, voltar para o lugar de onde ninguém sabe direito como ele funciona.
 
 Um detalhe no `database_url`: ele perdeu o `rango@`. Com a rotação de usuários alternados, o nome do usuário muda a cada mês, entre `rango` e `rango_clone`. Se o usuário estivesse fixo na URL, ela ganharia da variável de ambiente, porque a libpq dá preferência ao que vem na string de conexão. Sem ele, o driver usa o `PGUSER`, que o boot vai preencher a partir do segredo, como já faz com o `PGPASSWORD`.
 
-Aqui também se cumpre o que ficou pendente no capítulo 15 sobre a homologação do Bruno. Uma segunda chamada a `RangoInfraStack` no `app.py`, com `ambiente="homologacao"`, cria `/rango/homologacao/*`, uma chave `alias/rango-homologacao-segredos` e um segredo próprio. As duas stacks compartilham o código e nada mais.
+Aqui também se cumpre o que ficou pendente no capítulo 15 sobre a homologação do Bruno. Uma segunda chamada a `RangoInfraStack` no `app.py`, com `ambiente="homologacao"`, cria `/rango/homologacao/*`, uma chave `alias/rango-homologacao-segredos` e um segredo próprio. As duas stacks compartilham o código e nada mais, como irmãos que dividem o sobrenome e nenhuma escova de dentes.
 
 ### O boot que busca a configuração
 
-O user data do capítulo 15 trocava trechos de um `api.env` que vinha pronto na AMI. Agora ele escreve o arquivo inteiro do zero. Para não espremer um script de shell dentro de strings Python, ele mora num arquivo próprio, `rango-infra/user_data/configurar.sh`:
+O user data do capítulo 15 trocava trechos de um `api.env` que vinha pronto na AMI. Agora ele escreve o arquivo inteiro do zero. Para não espremer um script de shell dentro de strings Python, receita garantida para uma tarde inteira contando aspas, ele mora num arquivo próprio, `rango-infra/user_data/configurar.sh`:
 
 ```bash
 # Definidas antes deste trecho pela stack: AMBIENTE, REGIAO, SEGREDO_DB_ARN
@@ -311,9 +311,9 @@ rm -f "$CONFIG"
 systemctl restart rango-api rango-worker@restaurante rango-worker@email
 ```
 
-O `get-parameters-by-path` traz todos os parâmetros do ambiente, e o `awk` transforma `/rango/producao/redis_url` em `REDIS_URL=...`. O segundo comando lê o segredo e extrai usuário e senha com o Python do sistema, que o Amazon Linux 2023 já traz. O `mktemp` cria o arquivo temporário com permissão só para o root, e o `install` grava o `api.env` final com o mesmo dono e permissão do capítulo 9, `root:rango` e `640`. O arquivo antigo da AMI, com a senha vazada, é sobrescrito.
+O `get-parameters-by-path` traz todos os parâmetros do ambiente, e o `awk` transforma `/rango/producao/redis_url` em `REDIS_URL=...`. O segundo comando lê o segredo e extrai usuário e senha com o Python do sistema, que o Amazon Linux 2023 já traz. O `mktemp` cria o arquivo temporário com permissão só para o root, e o `install` grava o `api.env` final com o mesmo dono e permissão do capítulo 9, `root:rango` e `640`. O arquivo antigo da AMI, com a senha vazada, é sobrescrito. Ele sai de cena sem discurso de despedida.
 
-O user data roda no primeiro boot de cada instância, como vimos no capítulo 9. Num Auto Scaling Group, cada instância nova passa por ele, e as instâncias que já estão rodando não mudam. Guarde isso, porque vai importar na rotação.
+O user data roda no primeiro boot de cada instância, como vimos no capítulo 9. Num Auto Scaling Group, cada instância nova passa por ele, e as instâncias que já estão rodando não mudam. Esse detalhe vai importar na rotação.
 
 Na stack, o bloco de user data fica assim:
 
@@ -346,7 +346,7 @@ A role da API precisa ler os parâmetros do seu ambiente e o seu segredo:
         segredo_app.grant_read(role_api)
 ```
 
-O `grant_read` gera duas coisas. Na role, `secretsmanager:GetSecretValue` e `DescribeSecret` só nesse segredo. E, como o segredo usa uma chave sua, `kms:Decrypt` na chave, condicionado a chamadas que venham pelo Secrets Manager. A role consegue decifrar o segredo e nada mais com aquela chave.
+O `grant_read` gera duas coisas. Na role, `secretsmanager:GetSecretValue` e `DescribeSecret` só nesse segredo. E, como o segredo usa uma chave sua, `kms:Decrypt` na chave, condicionado a chamadas que venham pelo Secrets Manager. A role consegue decifrar o segredo e nada mais com aquela chave. É a chave do quarto de hotel que abre o seu quarto e não abre a cozinha do restaurante.
 
 No `AutoScalingGroup`, duas mudanças. A primeira é um parâmetro novo:
 
@@ -354,7 +354,7 @@ No `AutoScalingGroup`, duas mudanças. A primeira é um parâmetro novo:
             max_instance_lifetime=Duration.days(7),
 ```
 
-Ele faz o ASG trocar toda instância que completar sete dias, de forma gradual. O motivo é a rotação. Uma instância lê o segredo no boot e guarda a senha no `api.env`. Com usuários alternados, essa senha continua válida até a rotação seguinte à próxima, ou seja, por pelo menos 30 dias. Uma instância que vive no máximo sete dias nunca chega a ver a sua senha expirar.
+Ele faz o ASG trocar toda instância que completar sete dias, de forma gradual. O motivo é a rotação. Uma instância lê o segredo no boot e guarda a senha no `api.env`. Com usuários alternados, essa senha continua válida até a rotação seguinte à próxima, ou seja, por pelo menos 30 dias. Uma instância que vive no máximo sete dias nunca chega a ver a sua senha expirar. Uma semana de trabalho e aposentadoria compulsória: nenhuma instância do Rangô fica velha o bastante para reclamar.
 
 A segunda mudança é a ordem de criação, logo depois do ASG:
 
@@ -362,7 +362,7 @@ A segunda mudança é a ordem de criação, logo depois do ASG:
         asg.node.add_dependency(endpoint_ssm, endpoint_sm, rotacao, *parametros)
 ```
 
-No capítulo 15, os tokens criavam as dependências sozinhos: o Launch Template usava o endpoint do banco, logo vinha depois do banco. Aqui, o user data busca os parâmetros pelo caminho, em tempo de execução, e não referencia nenhum deles no template. Para o CloudFormation, nada impede que as instâncias subam antes dos parâmetros existirem ou antes dos endpoints ficarem prontos. O `add_dependency` deixa essa ordem explícita.
+No capítulo 15, os tokens criavam as dependências sozinhos: o Launch Template usava o endpoint do banco, logo vinha depois do banco. Aqui, o user data busca os parâmetros pelo caminho, em tempo de execução, e não referencia nenhum deles no template. Para o CloudFormation, nada impede que as instâncias subam antes dos parâmetros existirem ou antes dos endpoints ficarem prontos. O `add_dependency` deixa essa ordem explícita. Sem ele, a instância chegaria à festa antes de alguém montar as mesas.
 
 Por fim, duas saídas para os comandos seguintes:
 
@@ -378,9 +378,9 @@ cdk diff
 cdk deploy
 ```
 
-O `cdk diff` mostra a tabela de mudanças de IAM e pede confirmação no deploy, como no capítulo 15. Aparece também uma stack aninhada, criada pelo Serverless Application Repository com a função de rotação. O deploy leva o tempo de restaurar o banco do snapshot, uns 15 minutos.
+O `cdk diff` mostra a tabela de mudanças de IAM e pede confirmação no deploy, como no capítulo 15. Aparece também uma stack aninhada, criada pelo Serverless Application Repository com a função de rotação. O deploy leva o tempo de restaurar o banco do snapshot, uns 15 minutos, o suficiente para preparar um café e tentar lembrar quem colou aquela senha no Slack.
 
-Quando terminar, guarde as saídas:
+Quando ele termina, as saídas vão para variáveis:
 
 ```bash
 saida() {
@@ -391,7 +391,7 @@ SEGREDO=$(saida SegredoAppArn)
 ASG=$(saida AsgNome)
 ```
 
-Confira o estado da rotação:
+O estado da rotação aparece assim:
 
 ```bash
 aws secretsmanager describe-secret --secret-id "$SEGREDO" \
@@ -402,13 +402,13 @@ aws secretsmanager describe-secret --secret-id "$SEGREDO" \
 True    2026-10-16T14:22:08.512000-03:00    2026-11-15T20:59:59-03:00
 ```
 
-A primeira rotação já aconteceu. Agora force a segunda, a que troca a senha do `rango`:
+A primeira rotação já aconteceu. Agora vem a segunda, forçada à mão, a que troca a senha do `rango`:
 
 ```bash
 aws secretsmanager rotate-secret --secret-id "$SEGREDO"
 ```
 
-Espere meio minuto e veja quem é quem, sem nunca imprimir a senha no terminal:
+Meio minuto depois, dá para ver quem é quem, sem nunca imprimir a senha no terminal:
 
 ```bash
 for estagio in AWSCURRENT AWSPREVIOUS; do
@@ -424,7 +424,7 @@ AWSCURRENT rango
 AWSPREVIOUS rango_clone
 ```
 
-O `rango` voltou a ser o usuário atual, agora com uma senha que ninguém viu. A senha do Slack, do commit `a12d6c0` e da AMI parou de funcionar neste momento. O `rango_clone` continua válido, com a senha da primeira rotação.
+O `rango` voltou a ser o usuário atual, agora com uma senha que ninguém viu: nem você, nem o Bruno, nem o Slack. A senha do Slack, do commit `a12d6c0` e da AMI parou de funcionar neste momento. O `rango_clone` continua válido, com a senha da primeira rotação.
 
 Falta uma coisa. As duas instâncias que subiram durante o deploy leram o segredo uma vez, no boot, e não dá para saber se foi antes ou depois da primeira rotação terminar, porque o CloudFormation dispara a rotação e segue em frente. Uma instância que leu a versão gerada pelo CDK, antes da rotação, está com uma senha que o banco nunca conheceu. A forma limpa de garantir que todo mundo tem credencial válida é trocar todas as instâncias:
 
@@ -433,23 +433,23 @@ aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
   --preferences '{"MinHealthyPercentage": 50}'
 ```
 
-O *instance refresh* substitui as instâncias aos poucos, mantendo pelo menos metade saudável. Use o mesmo comando depois de qualquer mudança de Launch Template, porque o ASG não troca sozinho as instâncias que estão rodando.
+O *instance refresh* substitui as instâncias aos poucos, mantendo pelo menos metade saudável. O mesmo comando vale depois de qualquer mudança de Launch Template, porque o ASG não troca sozinho as instâncias que estão rodando.
 
-Suba o front com os dois comandos de sync do capítulo 14 e teste a API de fora:
+Com o front de volta pelos dois comandos de sync do capítulo 14, o teste da API é feito de fora:
 
 ```bash
 curl -s https://api.rango.com.br/pedidos/6f1c2a9e-3b4d-4e8f-9a1b-2c3d4e5f6a7b
 ```
 
-O pedido do snapshot volta como antes. O código do Rangô ficou igual; mudou de onde vêm as variáveis que ele lê.
+O pedido do snapshot volta como antes. O cliente não percebe nada, que é o maior elogio que uma mudança de segurança pode receber. O código do Rangô ficou igual; mudou de onde vêm as variáveis que ele lê. O FastAPI nem ficou sabendo da mudança, e ninguém pretende contar.
 
 Dentro de cada instância, o `api.env` ainda tem a senha em texto, só que ela nasce no boot, vem de um lugar com controle de acesso e deixa de valer sozinha.
 
 ### A faxina dos outros lugares
 
-Apague a mensagem do Slack e o `.env` do notebook; o `.env` local aponta só para o Postgres do Compose, com a senha de `secrets/db_password.txt` do capítulo 6. Reescrever o histórico do git com o `git filter-repo` limpa o repositório daqui para frente, e as cópias que já existem continuam com o commit. Quem resolveu o vazamento foi a troca da senha.
+A mensagem do Slack e o `.env` do notebook também precisam ser apagados; o `.env` local aponta só para o Postgres do Compose, com a senha de `secrets/db_password.txt` do capítulo 6. Reescrever o histórico do git com o `git filter-repo` limpa o repositório daqui para frente, e as cópias que já existem continuam com o commit. Reescrever o histórico depois do vazamento é trocar o tapete da porta depois que alguém já tirou cópia da chave. Quem resolveu o vazamento foi a troca da senha.
 
-O *push protection* do GitHub bloqueia pushes com credenciais de formato conhecido, como chaves de acesso da AWS. Senhas aleatórias de banco ele não reconhece, por isso a senha precisa nascer longe do repositório, como agora.
+O *push protection* do GitHub bloqueia pushes com credenciais de formato conhecido, como chaves de acesso da AWS. Senhas aleatórias de banco ele não reconhece (para um robô, `kX9#pQ2v` é indistinguível de um nome de variável mal escolhido), por isso a senha precisa nascer longe do repositório, como agora.
 
 ### Envelope encryption com as próprias mãos
 
@@ -492,33 +492,33 @@ python scripts/envelope.py
 Interfone quebrado, ligar ao chegar
 ```
 
-O pacote guarda só a versão cifrada da data key (`CiphertextBlob`); o `Plaintext` é usado e descartado. Os 51 bytes são os 35 do texto mais os 16 da etiqueta de autenticação do GCM, que detecta qualquer alteração nos dados. No `decifrar`, o `kms.decrypt` nem recebe o ID da chave: o `CiphertextBlob` já carrega a informação de qual chave o KMS deve usar.
+O pacote guarda só a versão cifrada da data key (`CiphertextBlob`); o `Plaintext` é usado e descartado. Os 51 bytes são os 35 do texto mais os 16 da etiqueta de autenticação do GCM, que detecta qualquer alteração nos dados. No `decifrar`, o `kms.decrypt` nem recebe o ID da chave: o `CiphertextBlob` já carrega a informação de qual chave o KMS deve usar. O envelope traz o endereço do remetente, por assim dizer. E o entregador, ao contrário do interfone do exemplo, funciona.
 
-Esse script é didático, e é o tipo de código em que um detalhe errado (um nonce repetido) quebra a segurança sem nenhum erro aparente. Para cifrar dados de verdade na aplicação, use o AWS Encryption SDK, que implementa o envelope, guarda os metadados num formato padrão e reaproveita data keys com segurança. E, antes de levar qualquer código de criptografia para produção, peça a revisão de alguém com experiência em segurança.
+Esse script é didático, e é o tipo de código em que um detalhe errado (um nonce repetido) quebra a segurança sem nenhum erro aparente. Para cifrar dados de verdade na aplicação, o caminho é o AWS Encryption SDK, que implementa o envelope, guarda os metadados num formato padrão e reaproveita data keys com segurança. E, antes de ir para produção, qualquer código de criptografia precisa passar pela revisão de alguém com experiência em segurança. Criptografia caseira é como cirurgia caseira: dá para fazer, e é exatamente por isso que não se deve.
 
-### Desligar
+### O desligamento
 
 ```bash
 cdk destroy
 ```
 
-O banco sai com snapshot final, como no capítulo 15; anote o nome com o mesmo `describe-db-snapshots`. A chave do KMS entra em `PendingDeletion` por sete dias, sem cobrar. Os endpoints, os parâmetros, os segredos e a função de rotação saem com a stack. Ficam a zona, o certificado, o bucket de fotos, a AMI, o snapshot e a stack `CDKToolkit`.
+O banco sai com snapshot final, como no capítulo 15; o nome aparece no mesmo `describe-db-snapshots`. A chave do KMS entra em `PendingDeletion` por sete dias, sem cobrar, uma espécie de aviso prévio que a chave cumpre sem trabalhar. Os endpoints, os parâmetros, os segredos e a função de rotação saem com a stack. Ficam a zona, o certificado, o bucket de fotos, a AMI, o snapshot e a stack `CDKToolkit`.
 
-Se mudar de ideia sobre a chave dentro da janela, rode `aws kms cancel-key-deletion --key-id <id>` e depois `aws kms enable-key`, porque a chave volta desabilitada.
+Para quem muda de ideia sobre a chave dentro da janela, o caminho é `aws kms cancel-key-deletion --key-id <id>` e depois `aws kms enable-key`, porque a chave volta desabilitada.
 
 ## Armadilhas e casos reais
 
-> **Armadilha:** O template guarda o que você escreve. Uma senha escrita no código do CDK, com `SecretValue.unsafe_plain_text` ou num `CfnOutput`, vai parar no template sintetizado, no bucket de assets do bootstrap e no console do CloudFormation, legível para quem tiver `cloudformation:GetTemplate`. O nome do método avisa. Deixe o valor ser gerado pelo serviço, como no `DatabaseSecret`.
+> **Armadilha:** O template guarda o que você escreve. Uma senha escrita no código do CDK, com `SecretValue.unsafe_plain_text` ou num `CfnOutput`, vai parar no template sintetizado, no bucket de assets do bootstrap e no console do CloudFormation, legível para quem tiver `cloudformation:GetTemplate`. O nome do método avisa, com uma honestidade que deveria vir acompanhada de sirene. Deixe o valor ser gerado pelo serviço, como no `DatabaseSecret`.
 
 > **Armadilha:** O CloudFormation cria parâmetros `String` e `StringList`, mas nunca `SecureString`. Quem procura `SecureString` no `ssm.StringParameter` não acha. Para segredo em código de infraestrutura, use o Secrets Manager. Um `SecureString` avulso sai da CLI com `aws ssm put-parameter --type SecureString`, digitado por alguém, fora do repositório.
 
-> **Armadilha:** Tabela com dono errado. O `rango_clone` herda as permissões do `rango` por `GRANT`, mas o que ele cria fica sendo dele. Se uma migration rodar enquanto a `AWSCURRENT` for o clone, a tabela nova pertence ao `rango_clone`, e o `rango` não consegue alterá-la no mês seguinte. Rode as migrations com o `rango_admin` e dê as permissões ao `rango`, ou comece a migration com `SET ROLE rango`.
+> **Armadilha:** Tabela com dono errado. O `rango_clone` herda as permissões do `rango` por `GRANT`, mas o que ele cria fica sendo dele. Se uma migration rodar enquanto a `AWSCURRENT` for o clone, a tabela nova pertence ao `rango_clone`, e o `rango` não consegue alterá-la no mês seguinte. Gêmeos idênticos, mas cada um com a sua escritura. Rode as migrations com o `rango_admin` e dê as permissões ao `rango`, ou comece a migration com `SET ROLE rango`.
 
 > **Armadilha:** Duas rotações seguidas derrubam quem ficou para trás. A rotação de usuários alternados protege quem leu a versão atual ou a anterior. Quem leu a versão de antes disso perde o acesso. Ao forçar rotações manuais em sequência, como fizemos, faça um instance refresh em seguida.
 
-> **Armadilha:** Apagar uma chave é apagar os dados. Tudo o que foi cifrado com uma chave do KMS depende dela para sempre. Antes de agendar a exclusão de uma chave antiga, desabilite-a com `aws kms disable-key` por algumas semanas e veja se algo quebra. Desabilitar se desfaz em um segundo; a exclusão, depois da janela, nunca.
+> **Armadilha:** Apagar uma chave é apagar os dados. Tudo o que foi cifrado com uma chave do KMS depende dela para sempre. Antes de agendar a exclusão de uma chave antiga, desabilite-a com `aws kms disable-key` por algumas semanas e veja se algo quebra. Desabilitar se desfaz em um segundo; a exclusão, depois da janela, nunca. É a diferença entre deixar alguém de castigo e apagar o contato.
 
-> **Armadilha:** `PowerUserAccess` lê todos os segredos. O permission set dos devs, do capítulo 8, inclui `secretsmanager:*` e `kms:*`, e a key policy padrão do CDK confia na conta, o que deixa o IAM decidir. Na prática, qualquer dev lê a senha de produção. A saída é uma conta separada para produção, assunto do capítulo 23.
+> **Armadilha:** `PowerUserAccess` lê todos os segredos. O permission set dos devs, do capítulo 8, inclui `secretsmanager:*` e `kms:*`, e a key policy padrão do CDK confia na conta, o que deixa o IAM decidir. Na prática, qualquer dev lê a senha de produção, inclusive o que entrou ontem e ainda nem sabe onde fica o banheiro. A saída é uma conta separada para produção, assunto do capítulo 23.
 
 > **Na vida real:** O caso da Toyota mostra o vazamento que ninguém nota por anos. Uma credencial que gira sozinha a cada 30 dias limita o estrago desse tipo de vazamento sem depender de alguém descobri-lo.
 
@@ -532,7 +532,7 @@ Se mudar de ideia sobre a chave dentro da janela, rode `aws kms cancel-key-delet
 
 ## Uma imagem que envelhece
 
-O segredo saiu dos arquivos, mas olhe de novo para a AMI `rango-api-20261015`. Ela ainda carrega o `api.env` antigo, com uma senha morta, e o código do Rangô do dia em que foi criada. Para mudar uma linha do `banco.py`, o caminho é subir uma instância de montagem numa subnet pública, cadastrar de novo a deploy key, rodar `git pull` e `pip install`, criar uma AMI nova, trocar o nome no `MachineImage.lookup` e disparar um instance refresh. E o Amazon Linux 2023 recebe atualizações de segurança com frequência, que só chegam às instâncias quando alguém refaz a imagem.
+O segredo saiu dos arquivos, mas a AMI `rango-api-20261015` merece um segundo olhar. Ela ainda carrega o `api.env` antigo, com uma senha morta, e o código do Rangô do dia em que foi criada. Para mudar uma linha do `banco.py`, o caminho é subir uma instância de montagem numa subnet pública, cadastrar de novo a deploy key, rodar `git pull` e `pip install`, criar uma AMI nova, trocar o nome no `MachineImage.lookup` e disparar um instance refresh. É uma receita com mais etapas que bolo de casamento, para mudar uma linha. E o Amazon Linux 2023 recebe atualizações de segurança com frequência, que só chegam às instâncias quando alguém refaz a imagem.
 
 No próximo capítulo, o Rangô troca a AMI por uma imagem de container. O Amazon ECR guarda as imagens, o Amazon ECS roda os containers e o AWS Fargate tira de cena o servidor que você precisava manter. E o segredo do banco vira um campo na definição da tarefa, injetado pelo próprio ECS quando o container sobe.
 

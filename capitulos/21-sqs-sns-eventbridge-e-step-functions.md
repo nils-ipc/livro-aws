@@ -1,22 +1,22 @@
 # SQS, SNS, EventBridge e Step Functions
 
-No capítulo anterior, o rastreamento das entregas saiu do Postgres e foi para o DynamoDB, e o Stream da tabela passou a avisar uma Lambda quando a entrega termina. Na despedida, olhamos o caminho de um pedido e vimos um quebra-cabeça: chamada síncrona na API, um stream no Valkey com mensagens órfãs, um webhook numa Lambda, um Stream que descarta registros depois de cinco falhas. Neste capítulo, o pedido ganha um fluxo único, que alguém consegue enxergar de ponta a ponta.
+No capítulo anterior, o rastreamento das entregas saiu do Postgres e foi para o DynamoDB, e o Stream da tabela passou a avisar uma Lambda quando a entrega termina. Na despedida, olhamos o caminho de um pedido e vimos um quebra-cabeça: chamada síncrona na API, um stream no Valkey com mensagens órfãs, um webhook numa Lambda, um Stream que descarta registros depois de cinco falhas. Neste capítulo, o pedido ganha um fluxo único, que alguém consegue enxergar de ponta a ponta. Hoje, quem enxerga o pedido inteiro é só o cliente, com fome e irritado.
 
 ## Terça, 20h40, sem gás na cozinha
 
-O botijão do Sabor do Sertão acabou no meio do jantar. O Bruno ligou para o restaurante, confirmou que a cozinha só voltaria no dia seguinte e foi olhar os pedidos. Eram seis, todos pagos por PIX, todos com status `pago` no banco, e nenhum ia sair.
+O botijão do Sabor do Sertão acabou no meio do jantar. O Bruno ligou para o restaurante, confirmou que a cozinha só voltaria no dia seguinte e foi olhar os pedidos. Eram seis, todos pagos por PIX, todos com status `pago` no banco, e nenhum ia sair. O sistema, impecável, continuava mostrando seis pedidos pagos e felizes.
 
-O worker `restaurante` tinha avisado o restaurante e marcado a mensagem como feita. Ninguém no sistema sabe o que fazer quando o restaurante recusa, então o Bruno abriu o painel do gateway e estornou os seis pagamentos à mão, um por um. Errou um deles: estornou duas vezes o mesmo pedido de R$ 62,40 e não estornou o de R$ 48,00.
+O worker `restaurante` tinha avisado o restaurante e marcado a mensagem como feita. Missão cumprida, do ponto de vista dele. Ninguém no sistema sabe o que fazer quando o restaurante recusa, então o Bruno abriu o painel do gateway e estornou os seis pagamentos à mão, um por um. Errou um deles: estornou duas vezes o mesmo pedido de R$ 62,40 e não estornou o de R$ 48,00. Ficou provado que uma pessoa às nove da noite, com fome e seis abas abertas, é o pior sistema distribuído já inventado.
 
-Na mesma noite, um deploy da API substituiu as tasks do worker de e-mail. Três mensagens ficaram pendentes no stream do Valkey, presas ao nome de uma task que já não existia, e três clientes nunca receberam a confirmação. Ninguém ficou sabendo até a reclamação chegar pelo Instagram.
+Na mesma noite, um deploy da API substituiu as tasks do worker de e-mail. Três mensagens ficaram pendentes no stream do Valkey, presas ao nome de uma task que já não existia, e três clientes nunca receberam a confirmação. Ninguém ficou sabendo até a reclamação chegar pelo Instagram, o sistema de monitoramento mais confiável do mercado e, de longe, o mais barulhento.
 
-E o Bruno quer mais. Ele pediu um SMS para o cliente quando o entregador sair, e a única forma de fazer isso hoje é pendurar mais uma chamada no meio do código, com mais um jeito de falhar.
+E o Bruno quer mais. Ele pediu um SMS para o cliente quando o entregador sair, e a única forma de fazer isso hoje é pendurar mais uma chamada no meio do código, com mais um jeito de falhar. O código já parece varal de roupa em dia de ventania.
 
 Os conceitos você já tem desde o capítulo 5. Falta a versão gerenciada de cada um e uma peça nova: alguém que conduza o pedido passo a passo e saiba desfazer o que já foi feito quando um passo falha.
 
 ## Quatro serviços, quatro trabalhos
 
-A AWS tem um serviço para cada papel do capítulo 5, e a confusão mais comum é achar que eles competem entre si. Eles se completam:
+A AWS tem um serviço para cada papel do capítulo 5, e a confusão mais comum é achar que eles competem entre si. Os nomes ajudam pouco: SQS e SNS diferem por uma letra, e ninguém lembra qual é qual antes do segundo café. Eles se completam:
 
 | Pergunta | Serviço | Analogia do capítulo 5 |
 |----------|---------|------------------------|
@@ -27,13 +27,13 @@ A AWS tem um serviço para cada papel do capítulo 5, e a confusão mais comum �
 
 ### Amazon SQS: a fila
 
-O Amazon SQS (Simple Queue Service) é a fila gerenciada mais antiga da AWS. Você cria uma fila, produtores mandam mensagens, consumidores pedem mensagens. Sem servidor, sem cluster, sem versão para atualizar.
+O Amazon SQS (Simple Queue Service) é a fila gerenciada mais antiga da AWS. Você cria uma fila, produtores mandam mensagens, consumidores pedem mensagens. Sem servidor, sem cluster, sem versão para atualizar. Ele é mais velho que o próprio EC2: na família AWS, é o avô que já viu de tudo e não se impressiona com mais nada.
 
-O detalhe que muda tudo é como o consumidor confirma o processamento. No SQS, receber uma mensagem não a remove da fila. Ela fica invisível para os outros consumidores durante um prazo, o *visibility timeout*. Se o consumidor terminar e chamar `DeleteMessage` dentro do prazo, a mensagem some. Se ele morrer, travar ou demorar demais, o prazo vence e a mensagem reaparece para qualquer outro consumidor.
+O detalhe que muda tudo é como o consumidor confirma o processamento. No SQS, receber uma mensagem não a remove da fila. Ela fica invisível para os outros consumidores durante um prazo, o *visibility timeout*. Se o consumidor terminar e chamar `DeleteMessage` dentro do prazo, a mensagem some. Se ele morrer, travar ou demorar demais, o prazo vence e a mensagem reaparece para qualquer outro consumidor. É a comanda que volta para o trilho quando o cozinheiro sai para atender o telefone e não volta.
 
-Você já usou essa ideia no capítulo 5, com outro nome: é um `SET NX EX` aplicado à mensagem, um lock com expiração. E ela resolve sozinha o problema dos pendentes órfãos do Valkey. No stream, a mensagem pendente pertencia a um consumidor com nome, e se esse consumidor desaparecesse alguém precisava rodar `XAUTOCLAIM`. No SQS, a mensagem não pertence a ninguém; o prazo vence e ela volta para a fila.
+Você já usou essa ideia no capítulo 5, com outro nome: é um `SET NX EX` aplicado à mensagem, um lock com expiração. E ela resolve sozinha o problema dos pendentes órfãos do Valkey. No stream, a mensagem pendente pertencia a um consumidor com nome, e se esse consumidor desaparecesse alguém precisava rodar `XAUTOCLAIM`. No SQS, a mensagem não pertence a ninguém; o prazo vence e ela volta para a fila, sem inventário nem briga de herança.
 
-O prazo padrão é de 30 segundos e vai de zero a 12 horas. Ele precisa ser maior que o tempo de processamento, ou a mesma mensagem vai ser processada duas vezes em paralelo.
+O prazo padrão é de 30 segundos e vai de zero a 12 horas. Ele precisa ser maior que o tempo de processamento, ou a mesma mensagem vai ser processada duas vezes em paralelo: dois cozinheiros fazendo o mesmo prato ao mesmo tempo, e o cliente pagando um.
 
 Cada mensagem guarda um contador, o `ApproximateReceiveCount`. Na fila, você configura uma *redrive policy*: depois de N recebimentos sem `DeleteMessage`, a mensagem vai para outra fila, a dead letter queue. É a DLQ do capítulo 5, agora como recurso de configuração em vez de código seu.
 
@@ -47,17 +47,17 @@ Alguns números para ter na cabeça (aproximados, conferidos em outubro de 2026)
 | Atraso na entrega (*delay*) | até 15 minutos |
 | Lote | até 10 mensagens por chamada |
 
-Para mensagens maiores, guarde o conteúdo no S3 e mande só a referência. No Rangô, a mensagem carrega só o ID do pedido.
+Para mensagens maiores, guarde o conteúdo no S3 e mande só a referência. No Rangô, a mensagem carrega só o ID do pedido. Ninguém precisa mandar a foto da pizza pela fila.
 
-Existem dois tipos de fila. A *standard* tem vazão praticamente ilimitada e entrega cada mensagem pelo menos uma vez, sem garantia de ordem. A *FIFO* ordena dentro de um grupo: mensagens com o mesmo `MessageGroupId` saem em ordem, e grupos diferentes andam em paralelo. O preço é a vazão: sem o modo de alta vazão, 300 chamadas por segundo por ação; com ele, até 70.000 em us-east-1 e 4.500 em sa-east-1. Para o Rangô, a standard basta: ordem entre e-mails de pedidos diferentes não importa, e a duplicata, possível nos dois tipos, a idempotência resolve.
+Existem dois tipos de fila. A *standard* tem vazão praticamente ilimitada e entrega cada mensagem pelo menos uma vez, sem garantia de ordem. A *FIFO* ordena dentro de um grupo: mensagens com o mesmo `MessageGroupId` saem em ordem, e grupos diferentes andam em paralelo. O preço é a vazão: sem o modo de alta vazão, 300 chamadas por segundo por ação; com ele, até 70.000 em us-east-1 e 4.500 em sa-east-1. Para o Rangô, a standard basta: ordem entre e-mails de pedidos diferentes não importa, e a duplicata, possível nos dois tipos, a idempotência resolve. Quem já recebeu a mesma notificação de entrega três vezes sabe que o "pelo menos uma vez" leva o "pelo menos" muito a sério.
 
-O consumidor mais simples de uma fila é uma Lambda, pelo *event source mapping* prometido no capítulo 19: um processo da AWS consulta a fila com *long polling* (a consulta espera até 20 segundos por mensagens), monta lotes e chama a função. Sem erro, o mapping apaga o lote. Com exceção, o lote inteiro volta para a fila, e uma mensagem estragada faz as outras nove serem processadas de novo. A saída é o `ReportBatchItemFailures`: a função devolve a lista das que falharam, e só elas voltam. A documentação da Lambda ainda pede um visibility timeout de pelo menos seis vezes o timeout da função, mais a janela de agrupamento do lote.
+O consumidor mais simples de uma fila é uma Lambda, pelo *event source mapping* prometido no capítulo 19: um processo da AWS consulta a fila com *long polling* (a consulta espera até 20 segundos por mensagens), monta lotes e chama a função. Sem erro, o mapping apaga o lote. Com exceção, o lote inteiro volta para a fila, e uma mensagem estragada faz as outras nove serem processadas de novo. É a turma inteira de castigo por causa de um aluno. A saída é o `ReportBatchItemFailures`: a função devolve a lista das que falharam, e só elas voltam. A documentação da Lambda ainda pede um visibility timeout de pelo menos seis vezes o timeout da função, mais a janela de agrupamento do lote.
 
 ### Amazon SNS: um aviso, vários interessados
 
 O Amazon SNS (Simple Notification Service) faz pub/sub. Você cria um *tópico*, publica mensagens nele, e cada *assinatura* recebe uma cópia. Assinaturas podem ser filas SQS, Lambdas, endpoints HTTPS, e-mail e SMS. Você já criou um tópico no capítulo 7, o `alertas-cobranca`, com uma assinatura de e-mail.
 
-O SNS empurra a mensagem e não guarda nada; com um assinante em apuros, ele tenta por um tempo e desiste. Por isso o padrão de mercado é SNS na frente e uma fila SQS atrás de cada consumidor, que guarda até ele dar conta. A entrega do SNS para o SQS não tem cobrança de SNS; você paga só as requisições da fila.
+O SNS empurra a mensagem e não guarda nada; com um assinante em apuros, ele tenta por um tempo e desiste, como o entregador que toca o interfone algumas vezes e vai embora sem deixar aviso. Por isso o padrão de mercado é SNS na frente e uma fila SQS atrás de cada consumidor, que guarda até ele dar conta, como a caixa de correio que dispensa o carteiro de esperar você chegar em casa. A entrega do SNS para o SQS não tem cobrança de SNS; você paga só as requisições da fila.
 
 Cada assinatura pode ter uma *filter policy*. A publicação leva atributos (pense em cabeçalhos HTTP da mensagem), e a assinatura declara quais quer receber:
 
@@ -65,13 +65,13 @@ Cada assinatura pode ter uma *filter policy*. A publicação leva atributos (pen
 {"tipo": ["pedido.confirmado", "pedido.cancelado"]}
 ```
 
-A fila de e-mail recebe confirmações e cancelamentos. A de SMS, só a saída do entregador. Quem publica não conhece os assinantes, que é o desacoplamento do capítulo 5: amanhã, uma fila para o programa de fidelidade assina o mesmo tópico sem ninguém mexer no publicador.
+A fila de e-mail recebe confirmações e cancelamentos. A de SMS, só a saída do entregador. Quem publica não conhece os assinantes, que é o desacoplamento do capítulo 5: amanhã, uma fila para o programa de fidelidade assina o mesmo tópico sem ninguém mexer no publicador. É o nível de desacoplamento que todo time sonha ter com o time vizinho.
 
-> **Na vida real:** O SNS envia SMS de verdade, mas por trás dele está o AWS End User Messaging SMS, com registro de remetente e regras próprias de cada país. Numa conta nova, o envio começa restrito a números verificados. No livro, o SMS fica simulado, como o e-mail está desde o capítulo 5.
+> **Na vida real:** O SNS envia SMS de verdade, mas por trás dele está o AWS End User Messaging SMS, com registro de remetente e regras próprias de cada país. Numa conta nova, o envio começa restrito a números verificados: a AWS pede referências antes de deixar você mandar mensagem para estranhos. No livro, o SMS fica simulado, como o e-mail está desde o capítulo 5.
 
 ### Amazon EventBridge: barramento e agenda
 
-O Amazon EventBridge também entrega eventos a vários destinos, e a pergunta inevitável é por que existe mais um. A diferença está em quem decide o roteamento e com base em quê.
+O Amazon EventBridge também entrega eventos a vários destinos, e a pergunta inevitável é por que existe mais um. Lançar mais um serviço que entrega mensagens é, ao que tudo indica, a especialidade da casa. A diferença está em quem decide o roteamento e com base em quê.
 
 Um evento do EventBridge tem formato fixo: `source` (quem emitiu), `detail-type` (o tipo) e `detail` (o conteúdo, um JSON livre). Os eventos chegam a um *barramento* (*event bus*), e *regras* no barramento comparam cada evento com um padrão e mandam os que batem para até alguns alvos. O padrão olha qualquer campo, inclusive dentro do `detail`:
 
@@ -83,7 +83,7 @@ Um evento do EventBridge tem formato fixo: `source` (quem emitiu), `detail-type`
 }
 ```
 
-Toda conta tem um barramento `default`, e nele a própria AWS publica eventos dos serviços: uma task do ECS que parou, um objeto novo no S3 (se você ligar), uma execução do Step Functions que falhou. Esses eventos de serviço não custam nada para entrar. Você também cria barramentos próprios e publica eventos seus, por US$ 1,00 por milhão (cada 64 KB contam como um evento). Entregar a um alvo na mesma conta não custa.
+Toda conta tem um barramento `default`, e nele a própria AWS publica eventos dos serviços: uma task do ECS que parou, um objeto novo no S3 (se você ligar), uma execução do Step Functions que falhou. Esses eventos de serviço não custam nada para entrar. Você também cria barramentos próprios e publica eventos seus, por US$ 1,00 por milhão (cada 64 KB contam como um evento). Entregar a um alvo na mesma conta não custa. Duas gratuidades seguidas no mesmo parágrafo da AWS é um acontecimento raro, digno de foto.
 
 Comparando com o SNS:
 
@@ -97,17 +97,17 @@ Comparando com o SNS:
 
 A regra prática que uso: SNS quando o publicador é seu e você quer fan-out simples e rápido; EventBridge quando o evento vem da AWS ou quando o roteamento depende do conteúdo. No Rangô, os dois aparecem.
 
-O EventBridge Pipes liga uma fonte (um Stream do DynamoDB, uma fila) a um alvo, com filtro no meio, por US$ 0,40 por milhão de eventos. É a resposta à armadilha do capítulo 20: quando o Stream precisa de muitos leitores, um pipe publica num barramento, e as regras distribuem.
+O EventBridge Pipes liga uma fonte (um Stream do DynamoDB, uma fila) a um alvo, com filtro no meio, por US$ 0,40 por milhão de eventos. É a resposta à armadilha do capítulo 20: quando o Stream precisa de muitos leitores, um pipe publica num barramento, e as regras distribuem. O nome é literal: um cano com filtro, ligando uma ponta à outra, e nenhum encanador reclamaria.
 
-E o EventBridge Scheduler. O capítulo 19 agendou o resumo de vendas com regras de cron em UTC, e você converteu 11h em 14h de cabeça. O Scheduler aceita fuso horário (`America/Sao_Paulo`), agendamentos únicos e recorrentes, e tem 14 milhões de invocações gratuitas por mês; depois, US$ 1,00 por milhão.
+E o EventBridge Scheduler. O capítulo 19 agendou o resumo de vendas com regras de cron em UTC, e você converteu 11h em 14h de cabeça. Converter fuso de cabeça é a segunda maior fonte de bugs da humanidade; a primeira é converter fuso no código. O Scheduler aceita fuso horário (`America/Sao_Paulo`), agendamentos únicos e recorrentes, e tem 14 milhões de invocações gratuitas por mês; depois, US$ 1,00 por milhão.
 
 ### AWS Step Functions: o pedido como máquina de estados
 
-SQS, SNS e EventBridge levam mensagens de um lugar a outro. Nenhum deles responde à pergunta do botijão: o restaurante recusou um pedido pago, quem estorna? Para isso é preciso alguém que lembre em que ponto o pedido está e decida o próximo passo, inclusive o passo de desfazer.
+SQS, SNS e EventBridge levam mensagens de um lugar a outro. Nenhum deles responde à pergunta do botijão: o restaurante recusou um pedido pago, quem estorna? Para isso é preciso alguém que lembre em que ponto o pedido está e decida o próximo passo, inclusive o passo de desfazer. Em outras palavras, um adulto na sala.
 
-O AWS Step Functions faz isso com uma *máquina de estados*. Você descreve o processo em JSON, na Amazon States Language: estados `Task` (fazer algo, como chamar uma Lambda ou publicar no SNS), `Choice` (um `if`), `Wait`, `Parallel`, `Map`, `Succeed` e `Fail`. Cada pedido vira uma *execução*, com histórico de cada passo, entrada e saída, visível no console como um diagrama com o passo atual pintado.
+O AWS Step Functions faz isso com uma *máquina de estados*. Você descreve o processo em JSON, na Amazon States Language: estados `Task` (fazer algo, como chamar uma Lambda ou publicar no SNS), `Choice` (um `if`), `Wait`, `Parallel`, `Map`, `Succeed` e `Fail`. Cada pedido vira uma *execução*, com histórico de cada passo, entrada e saída, visível no console como um diagrama com o passo atual pintado. É o rastreio de encomenda que você sempre quis ter para os próprios sistemas.
 
-Pense num reducer do React com efeitos colaterais, cujo estado vive na AWS e sobrevive a deploys, quedas de task e dias de espera. O tratamento de erro é declarativo. Um estado `Task` ganha `Retry` e `Catch`:
+Pense num reducer do React com efeitos colaterais, cujo estado vive na AWS e sobrevive a deploys, quedas de task e dias de espera: um `useReducer` que não perde nada quando alguém aperta F5 no datacenter. O tratamento de erro é declarativo. Um estado `Task` ganha `Retry` e `Catch`:
 
 ```json
 "ConfirmarRestaurante": {
@@ -125,11 +125,11 @@ Pense num reducer do React com efeitos colaterais, cujo estado vive na AWS e sob
 }
 ```
 
-É o backoff exponencial com full jitter do capítulo 5, sem uma linha de Python. O nome do erro é o nome da classe da exceção que a Lambda lançou. Se as tentativas acabam, o `Catch` desvia para outro estado.
+É o backoff exponencial com full jitter do capítulo 5, sem uma linha de Python. Só JSON, o que, dependendo do seu dia, pode ser pior. O nome do erro é o nome da classe da exceção que a Lambda lançou. Se as tentativas acabam, o `Catch` desvia para outro estado.
 
-Desviar para o estorno tem nome: *compensação*. Num banco de dados, uma transação desfaz tudo com `ROLLBACK`. Entre sistemas diferentes (o seu banco, o gateway, o restaurante), não existe rollback; cada passo feito precisa de um passo contrário, executado quando algo adiante falha. Essa sequência de passos com compensações é chamada de *saga*. O estorno é a compensação do pagamento.
+Desviar para o estorno tem nome: *compensação*. Num banco de dados, uma transação desfaz tudo com `ROLLBACK`. Entre sistemas diferentes (o seu banco, o gateway, o restaurante), não existe rollback; cada passo feito precisa de um passo contrário, executado quando algo adiante falha. Essa sequência de passos com compensações é chamada de *saga*. O estorno é a compensação do pagamento. O nome saga é bem escolhido: quem já tentou cancelar uma assinatura por telefone sabe que desfazer um passo pode virar uma epopeia.
 
-A outra peça que o pedido precisa é esperar. O pagamento chega por webhook, minutos depois; o entregador sai quando o prato fica pronto. O Step Functions resolve com o *callback*: um estado `Task` com o sufixo `.waitForTaskToken` gera um token, entrega esse token a quem você indicar e fica parado até alguém chamar `SendTaskSuccess` (ou `SendTaskFailure`) com ele. A execução esperando não consome nada além do registro.
+A outra peça que o pedido precisa é esperar. O pagamento chega por webhook, minutos depois; o entregador sai quando o prato fica pronto. O Step Functions resolve com o *callback*: um estado `Task` com o sufixo `.waitForTaskToken` gera um token, entrega esse token a quem você indicar e fica parado até alguém chamar `SendTaskSuccess` (ou `SendTaskFailure`) com ele. A execução esperando não consome nada além do registro. É o único funcionário que espera dois dias sem reclamar e sem pedir hora extra.
 
 Existem dois tipos de máquina:
 
@@ -142,9 +142,9 @@ Existem dois tipos de máquina:
 | Histórico por passo no console | sim | via CloudWatch Logs |
 | `StartExecution` com mesmo nome | idempotente | não idempotente |
 
-O pedido do Rangô espera webhook e entregador, então vai de Standard. A conta é por transição: cada passo concluído conta, e cada nova tentativa de um `Retry` também.
+O pedido do Rangô espera webhook e entregador, então vai de Standard. Express, para quem espera entregador, seria otimismo demais. A conta é por transição: cada passo concluído conta, e cada nova tentativa de um `Retry` também. Insistir custa, aqui como na vida.
 
-## Mão na massa
+## Na prática
 
 ### O desenho
 
@@ -173,11 +173,11 @@ POST /pedidos ──► Postgres (recebido) ──► StartExecution(name = id d
                                 └─► fila sms   ──► Lambda avisos-sms   (DLQ)
 ```
 
-O stream do Valkey e os dois workers no ECS vão embora. O Valkey continua com a idempotência da API e o cache.
+O stream do Valkey e os dois workers no ECS vão embora. O Valkey continua com a idempotência da API e o cache. Perde um cargo e mantém dois, o que, no mercado de hoje, é uma vitória.
 
 ### O ponto de partida
 
-Como no capítulo anterior, encontre o snapshot deixado pelo `cdk destroy`:
+Como no capítulo anterior, o ponto de partida é o snapshot deixado pelo `cdk destroy`, que este comando encontra:
 
 ```bash
 aws rds describe-db-snapshots --snapshot-type manual \
@@ -185,7 +185,7 @@ aws rds describe-db-snapshots --snapshot-type manual \
   --output text
 ```
 
-Coloque o nome no `snapshot_db` do `rango-infra/app.py`. No `rango-infra/cdk.json`, acrescente ao `context` o e-mail que vai receber alertas:
+O nome dele vai no `snapshot_db` do `rango-infra/app.py`. No `rango-infra/cdk.json`, o `context` ganha o e-mail que vai receber alertas:
 
 ```json
 "email_alertas": "alertas@rango.com.br"
@@ -193,9 +193,9 @@ Coloque o nome no `snapshot_db` do `rango-infra/app.py`. No `rango-infra/cdk.jso
 
 ### A espera, guardada no DynamoDB
 
-O callback cria um problema de corrida. O fluxo começa, chega ao `AguardarPagamento` e entrega o token a uma Lambda, que o guarda. Se o webhook do pagamento chegar antes de o token estar guardado (um cartão aprovado em dois segundos, uma Lambda em cold start), quem avisa o fluxo?
+O callback cria um problema de corrida. O fluxo começa, chega ao `AguardarPagamento` e entrega o token a uma Lambda, que o guarda. Se o webhook do pagamento chegar antes de o token estar guardado (um cartão aprovado em dois segundos, uma Lambda em cold start), quem avisa o fluxo? É o convidado que chega à festa antes do aniversariante e não tem a quem entregar o presente.
 
-A solução é um item no DynamoDB por espera, com dois campos: `token`, gravado pelo fluxo, e `resultado`, gravado por quem traz a notícia. Cada lado grava o seu campo e lê o item inteiro na mesma operação atômica. Quem chegar por último encontra os dois e chama o `SendTaskSuccess`. Crie `backend/lambdas/rango_lambda/fluxo.py`:
+A solução é um item no DynamoDB por espera, com dois campos: `token`, gravado pelo fluxo, e `resultado`, gravado por quem traz a notícia. Cada lado grava o seu campo e lê o item inteiro na mesma operação atômica. Quem chegar por último encontra os dois e chama o `SendTaskSuccess`. Pela primeira vez na história, chegar atrasado vem com responsabilidade. O código fica em `backend/lambdas/rango_lambda/fluxo.py`:
 
 ```python
 import json
@@ -293,7 +293,7 @@ def handler(event, context):
     return {"aceito": aceito}
 ```
 
-A primeira checagem cobre o passo repetido: a Lambda grava `confirmado`, morre antes de responder, e o `Retry` chama de novo.
+A primeira checagem cobre o passo repetido: a Lambda grava `confirmado`, morre antes de responder, e o `Retry` chama de novo. Sem ela, o restaurante ouviria "aceita o pedido?" outra vez, como o garçom que pergunta se está tudo bem pela quarta vez.
 
 E `cancelar_pedido.py`, que serve aos dois caminhos de cancelamento:
 
@@ -321,7 +321,7 @@ def handler(event, context):
     return {"status": novo}
 ```
 
-A chave `estorno-{pedido_id}` é o que teria salvado o Bruno na terça: se o passo rodar duas vezes, o gateway reconhece a chave e devolve o primeiro estorno em vez de fazer outro.
+A chave `estorno-{pedido_id}` é o que teria salvado o Bruno na terça: se o passo rodar duas vezes, o gateway reconhece a chave e devolve o primeiro estorno em vez de fazer outro. E o cliente dos R$ 48,00 teria recebido o dinheiro sem precisar reclamar no Instagram.
 
 Para os avisos, `avisos.py`, que atende o e-mail e o SMS:
 
@@ -373,13 +373,13 @@ def handler(event, context):
     return {"batchItemFailures": falhas}
 ```
 
-O `put_item` condicional é o `SET NX` do capítulo 5 no DynamoDB: marca o aviso antes de enviar, e a duplicata encontra a marca e sai. Se o envio falha, a marca é apagada. Sobra uma janela pequena (o ambiente morrer entre enviar e terminar) para um e-mail duplicado, o que é aceitável.
+O `put_item` condicional é o `SET NX` do capítulo 5 no DynamoDB: marca o aviso antes de enviar, e a duplicata encontra a marca e sai. Se o envio falha, a marca é apagada. Sobra uma janela pequena (o ambiente morrer entre enviar e terminar) para um e-mail duplicado, o que é aceitável. Ninguém nunca abriu chamado por ter sido avisado duas vezes de que a comida está a caminho.
 
 > **Dica:** O Powertools for AWS Lambda (Python), biblioteca de código aberto mantida pela AWS, tem um utilitário de idempotência que faz esse controle com uma tabela do DynamoDB e um decorator. Conheça antes de escrever o seu terceiro controle à mão.
 
 ### A máquina de estados na stack
 
-No `rango-infra/rango_infra/rango_infra_stack.py`, acrescente os imports:
+No `rango-infra/rango_infra/rango_infra_stack.py`, entram os imports:
 
 ```python
 from aws_cdk import (
@@ -396,7 +396,7 @@ from aws_cdk import (
 )
 ```
 
-Apague o laço dos workers do capítulo 17 (o `for grupo in ("restaurante", "email")` inteiro) e as três `events.Rule` do resumo de vendas do capítulo 19. Depois do bloco do webhook, a tabela do fluxo, o endpoint e o tópico:
+O laço dos workers do capítulo 17 (o `for grupo in ("restaurante", "email")` inteiro) e as três `events.Rule` do resumo de vendas do capítulo 19 saem da stack. Depois do bloco do webhook, a tabela do fluxo, o endpoint e o tópico:
 
 ```python
         tabela_fluxo = dynamodb.Table(
@@ -470,7 +470,7 @@ As Lambdas que não usam o banco ficam fora da VPC, com um auxiliar próprio:
         )
 ```
 
-O prefixo `Fn` nos IDs evita colisão com os passos da máquina, que vão usar `ConfirmarRestaurante` como ID; dois constructs com o mesmo ID na mesma stack quebram o `cdk synth`. O ARN da máquina foi montado pelo nome, e não com `maquina.grant_task_response(guardar)`, por causa de uma dependência circular: a máquina precisa da função para existir, a função depende da policy da sua role, e a policy precisaria do ARN da máquina. O CloudFormation recusa o template. Montar o ARN pelo nome quebra o círculo.
+O prefixo `Fn` nos IDs evita colisão com os passos da máquina, que vão usar `ConfirmarRestaurante` como ID; dois constructs com o mesmo ID na mesma stack quebram o `cdk synth`. O ARN da máquina foi montado pelo nome, e não com `maquina.grant_task_response(guardar)`, por causa de uma dependência circular: a máquina precisa da função para existir, a função depende da policy da sua role, e a policy precisaria do ARN da máquina. O CloudFormation recusa o template. É o ovo e a galinha, versão infraestrutura como código. Montar o ARN pelo nome quebra o círculo.
 
 Agora os passos e a máquina. Três auxiliares evitam repetição:
 
@@ -522,7 +522,7 @@ Agora os passos e a máquina. Três auxiliares evitam repetição:
             )
 ```
 
-O cancelamento termina em `Succeed`, e isso é deliberado. Um pedido cancelado é um desfecho previsto do negócio. `Fail` fica para o que ninguém previu, e é nele que o alerta vai disparar.
+O cancelamento termina em `Succeed`, e isso é deliberado. Um pedido cancelado é um desfecho previsto do negócio. `Fail` fica para o que ninguém previu, e é nele que o alerta vai disparar. Acordar alguém por causa de um pedido cancelado é o caminho mais curto para o alerta ser silenciado para sempre.
 
 O fluxo, montado de trás para frente:
 
@@ -572,7 +572,7 @@ O fluxo, montado de trás para frente:
         )
 ```
 
-Leia de baixo para cima e você tem o desenho do começo da seção. O estado da execução começa como `{"pedido_id": "..."}`, e cada `result_path` acrescenta um campo (`pagamento`, `restaurante`, `erro`) que o `Choice` lê. O `task_timeout` do pagamento é o PIX nunca pago: em 15 minutos, `States.Timeout` e cancelamento sem estorno. O CDK gera a Amazon States Language e a role da máquina, com permissão para as três Lambdas e o tópico.
+Lido de baixo para cima, o código é o desenho do começo da seção. O estado da execução começa como `{"pedido_id": "..."}`, e cada `result_path` acrescenta um campo (`pagamento`, `restaurante`, `erro`) que o `Choice` lê. O `task_timeout` do pagamento é o PIX nunca pago: em 15 minutos, `States.Timeout` e cancelamento sem estorno. O CDK gera a Amazon States Language e a role da máquina, com permissão para as três Lambdas e o tópico.
 
 ### Avisos: SNS na frente, SQS atrás
 
@@ -611,9 +611,9 @@ Uma fila com DLQ por canal, cada uma assinando o tópico com o seu filtro, e uma
             )
 ```
 
-Função de 20 segundos, fila de dois minutos: a regra das seis vezes. O `max_receive_count=5` segue a recomendação da AWS para filas lidas pela Lambda; com menos, uma rajada de throttling manda mensagens boas para a DLQ, que guarda por 14 dias, o máximo. O `raw_message_delivery=True` entrega só o corpo publicado, sem o envelope do SNS, e transforma os atributos em atributos da mensagem SQS, onde o `avisos.py` lê o `tipo`.
+Função de 20 segundos, fila de dois minutos: a regra das seis vezes. Seis vezes vinte dá cento e vinte, e cento e vinte segundos dão dois minutos; fim da aula de aritmética. O `max_receive_count=5` segue a recomendação da AWS para filas lidas pela Lambda; com menos, uma rajada de throttling manda mensagens boas para a DLQ, que guarda por 14 dias, o máximo. Catorze dias bastam para alguém perceber, desde que alguém olhe. O `raw_message_delivery=True` entrega só o corpo publicado, sem o envelope do SNS, e transforma os atributos em atributos da mensagem SQS, onde o `avisos.py` lê o `tipo`.
 
-Aproveite para fechar o furo do capítulo 20. No `DynamoEventSource` da `entrega_concluida`, acrescente um destino para as falhas:
+De quebra, dá para fechar o furo do capítulo 20. O `DynamoEventSource` da `entrega_concluida` ganha um destino para as falhas:
 
 ```python
         falhas_entregas = sqs.Queue(
@@ -674,11 +674,11 @@ def iniciar_fluxo(pedido_id: str) -> None:
     iniciar_fluxo(str(pedido["id"]))
 ```
 
-O nome da execução é o ID do pedido. Numa máquina Standard, repetir o `StartExecution` com o mesmo nome e a mesma entrada, enquanto a execução roda, devolve a mesma execução; com entrada diferente ou execução encerrada, vem `ExecutionAlreadyExists`. Por isso a entrada é mínima e montada sempre igual.
+O nome da execução é o ID do pedido. Numa máquina Standard, repetir o `StartExecution` com o mesmo nome e a mesma entrada, enquanto a execução roda, devolve a mesma execução; com entrada diferente ou execução encerrada, vem `ExecutionAlreadyExists`. Por isso a entrada é mínima e montada sempre igual, como o avô que conta a mesma história com as mesmas palavras em todo almoço de domingo.
 
-O `except` só registra o erro porque `INSERT` e `StartExecution` são a escrita dupla do capítulo 5, prometida para cá desde o capítulo 12: se a task morrer entre as duas linhas, o pedido existe e o fluxo não. A resposta vem logo adiante.
+O `except` só registra o erro porque `INSERT` e `StartExecution` são a escrita dupla do capítulo 5, prometida para cá desde o capítulo 12 (nove capítulos de suspense, mais do que muita novela): se a task morrer entre as duas linhas, o pedido existe e o fluxo não. A resposta vem logo adiante.
 
-Delete `backend/app/worker.py` e a constante `STREAM_PEDIDOS`. Copie o `fluxo.py` para `backend/app/fluxo.py` e, em `backend/app/entregas.py`, faça a rota `iniciar` exigir pedido confirmado e avisar o fluxo:
+O `backend/app/worker.py` e a constante `STREAM_PEDIDOS` saem do projeto. O `fluxo.py` ganha uma cópia em `backend/app/fluxo.py` e, em `backend/app/entregas.py`, a rota `iniciar` passa a exigir pedido confirmado e a avisar o fluxo:
 
 ```python
 from app.fluxo import avisar
@@ -703,7 +703,7 @@ from fluxo import avisar
 
 ### Agendas com fuso e a varredura
 
-A cada cinco minutos, a varredura chama o `StartExecution` para os pedidos recentes sem desfecho. Para quem já tem fluxo, nada muda; para o órfão, o fluxo começa. Crie `backend/lambdas/rango_lambda/varredura.py`:
+A cada cinco minutos, a varredura chama o `StartExecution` para os pedidos recentes sem desfecho. Para quem já tem fluxo, nada muda; para o órfão, o fluxo começa. É o bedel passando pelos corredores atrás de aluno perdido. O código fica em `backend/lambdas/rango_lambda/varredura.py`:
 
 ```python
 import json
@@ -765,7 +765,7 @@ def handler(event, context):
             )
 ```
 
-As horas agora são as do Bruno, e um eventual horário de verão não desalinha nada.
+As horas agora são as do Bruno, e um eventual horário de verão não desalinha nada. O Brasil aboliu o horário de verão em 2019, mas fuso horário é como nota fiscal: melhor guardar.
 
 ### Alerta quando um fluxo falha
 
@@ -792,20 +792,20 @@ O último pedaço usa o barramento `default` e os eventos que o próprio Step Fu
         )
 ```
 
-Estorno que falhou seis vezes, entregador que não saiu em duas horas: tudo vira e-mail. Cancelamentos terminam em `Succeed` e não disparam nada.
+Estorno que falhou seis vezes, entregador que não saiu em duas horas: tudo vira e-mail. A caixa de alertas vira um grupo de condomínio: chega mensagem o dia inteiro e ninguém lê. Cancelamentos terminam em `Succeed` e não disparam nada.
 
 ### Deploy e o primeiro pedido acompanhado
 
-Reative os workflows, faça o commit de `backend/` e `rango-infra/` e envie para a `main`:
+O deploy começa reativando os workflows e enviando o commit de `backend/` e `rango-infra/` para a `main`:
 
 ```bash
 gh workflow enable ci.yaml
 gh workflow enable renovar-tasks.yaml
 ```
 
-Depois da sua aprovação no environment `producao`, o pipeline publica a imagem nova e o `cdk deploy` cria tudo. O `cdk diff` no log mostra os dois serviços de worker sendo removidos. Confirme a assinatura de e-mail do tópico de alertas, como no capítulo 7.
+Depois da sua aprovação no environment `producao`, o pipeline publica a imagem nova e o `cdk deploy` cria tudo. O `cdk diff` no log mostra os dois serviços de worker sendo removidos. A assinatura de e-mail do tópico de alertas precisa ser confirmada, como no capítulo 7.
 
-Para os testes, dois atalhos. Exporte `URL_WEBHOOKS` e `SEGREDO_WEBHOOK_ARN` com as saídas da stack, como no capítulo 19, e leia a chave do webhook para a variável `CHAVE_WEBHOOK`. Depois:
+Para os testes, dois atalhos. As variáveis `URL_WEBHOOKS` e `SEGREDO_WEBHOOK_ARN` recebem as saídas da stack, como no capítulo 19, e a chave do webhook vai para a variável `CHAVE_WEBHOOK`. Depois:
 
 ```bash
 API=https://api.rango.com.br
@@ -838,7 +838,7 @@ passo() {  # em que passo está o pedido $1
 }
 ```
 
-O ARN de uma execução é o da máquina com `execution` no lugar de `stateMachine` e o nome da execução no fim, que é o ID do pedido. Crie um pedido e veja onde ele está:
+O ARN de uma execução é o da máquina com `execution` no lugar de `stateMachine` e o nome da execução no fim, que é o ID do pedido. O primeiro pedido nasce assim, e o `passo` mostra onde ele está:
 
 ```bash
 read PEDIDO CHAVE < <(criar cantina-da-nona)
@@ -850,7 +850,7 @@ RUNNING
 AguardarPagamento
 ```
 
-O fluxo está parado, esperando o PIX. Pague e pergunte de novo:
+O fluxo está parado, esperando o PIX. Depois do pagamento, a mesma pergunta:
 
 ```bash
 pagar "$PEDIDO" "$CHAVE"
@@ -865,7 +865,7 @@ AguardarEntregador
 "confirmado"
 ```
 
-Em três segundos, o webhook avisou o fluxo, o restaurante confirmou e o evento `pedido.confirmado` passou pelo SNS até a fila de e-mail. Confira no log da Lambda:
+Em três segundos, o webhook avisou o fluxo, o restaurante confirmou e o evento `pedido.confirmado` passou pelo SNS até a fila de e-mail. Três segundos é menos do que o Bruno levou, na terça, para achar o botão de estorno. O log da Lambda confirma:
 
 ```bash
 GRUPO=$(aws lambda get-function-configuration --function-name rango-producao-avisos-email \
@@ -891,11 +891,11 @@ SUCCEEDED
 PedidoEmRota
 ```
 
-O log da `rango-producao-avisos-sms` mostra o `entrega.iniciada`: o SMS do Bruno é mais um assinante do tópico. No console do Step Functions, o diagrama da execução mostra cada passo em verde, com entrada, saída e o tempo de espera do pagamento.
+O log da `rango-producao-avisos-sms` mostra o `entrega.iniciada`: o SMS do Bruno é mais um assinante do tópico. É o primeiro pedido do Bruno atendido sem mexer no código de mais ninguém. No console do Step Functions, o diagrama da execução mostra cada passo em verde, com entrada, saída e o tempo de espera do pagamento.
 
 ### O restaurante recusa
 
-Simule o botijão vazio do Sabor do Sertão. A variável `RECUSAR` entra direto na função, somada às que o CDK definiu, porque o `update-function-configuration` substitui o ambiente inteiro:
+Agora, a simulação do botijão vazio do Sabor do Sertão. A variável `RECUSAR` entra direto na função, somada às que o CDK definiu, porque o `update-function-configuration` substitui o ambiente inteiro:
 
 ```bash
 FN=rango-producao-confirmar-restaurante
@@ -917,13 +917,13 @@ FimEstornar
 "estornado"
 ```
 
-O log da `cancelar-pedido` mostra o estorno com a chave `estorno-<pedido>`, e o da `avisos-email` mostra o `pedido.cancelado`. Ninguém abriu o painel do gateway. Isso é drift proposital, no sentido do capítulo 15; desfaça agora com `jq -c 'del(.RECUSAR)'` no mesmo comando, ou deixe o próximo deploy desfazer.
+O log da `cancelar-pedido` mostra o estorno com a chave `estorno-<pedido>`, e o da `avisos-email` mostra o `pedido.cancelado`. Ninguém abriu o painel do gateway, e o Bruno pode, enfim, jantar em paz. Isso é drift proposital, no sentido do capítulo 15; dá para desfazer na hora com `jq -c 'del(.RECUSAR)'` no mesmo comando, ou deixar o próximo deploy desfazer.
 
 Com `FALHA_RESTAURANTE` em `0.5`, o histórico mostra o `Retry` com intervalos irregulares. E um pedido não pago termina, 15 minutos depois, em `FimCancelar`.
 
 ### Uma mensagem envenenada
 
-Mande à fila de e-mail uma mensagem sem o atributo `tipo`, como faria um bug num publicador futuro:
+O próximo teste manda à fila de e-mail uma mensagem sem o atributo `tipo`, como faria um bug num publicador futuro:
 
 ```bash
 FILA=$(aws sqs get-queue-url --queue-name rango-producao-email --query QueueUrl --output text)
@@ -944,9 +944,9 @@ aws sqs get-queue-attributes --queue-url "$DLQ" \
 }
 ```
 
-As mensagens boas continuaram passando. Inspecione com `aws sqs receive-message --queue-url "$DLQ" --message-attribute-names All` e apague com `aws sqs purge-queue --queue-url "$DLQ"`.
+As mensagens boas continuaram passando. A maçã podre foi para a quarentena, e o resto do cesto seguiu viagem. Ela pode ser inspecionada com `aws sqs receive-message --queue-url "$DLQ" --message-attribute-names All` e apagada com `aws sqs purge-queue --queue-url "$DLQ"`.
 
-O caso oposto é o do provedor de e-mail fora do ar por uma hora: mensagens boas na DLQ. Depois que o provedor voltar, devolva todas à fila de origem:
+O caso oposto é o do provedor de e-mail fora do ar por uma hora: mensagens boas na DLQ. Depois que o provedor volta, um comando devolve todas à fila de origem:
 
 ```bash
 DLQ_ARN=$(aws sqs get-queue-attributes --queue-url "$DLQ" \
@@ -968,11 +968,11 @@ Com os preços de referência de outubro de 2026 em us-east-1 (aproximados; conf
 | EventBridge Scheduler | ~8.700 invocações, dentro das 14 milhões gratuitas | US$ 0 |
 | Workers do ECS removidos | estimativa do capítulo 17 | −US$ 14 |
 
-Uns US$ 8 a mais por mês. O endpoint é o preço de manter as subnets sem internet; a máquina cresce linearmente, uns US$ 7 a cada mil pedidos diários.
+Uns US$ 8 a mais por mês, o preço de um pastel com caldo de cana na feira para nunca mais estornar pedido à mão. O endpoint é o preço de manter as subnets sem internet; a máquina cresce linearmente, uns US$ 7 a cada mil pedidos diários.
 
 ### Desmontando
 
-Execuções em andamento seguram a máquina. Pare as que estiverem esperando e destrua a stack:
+Execuções em andamento seguram a máquina, então o desmonte para as que estiverem esperando antes de destruir a stack:
 
 ```bash
 for e in $(aws stepfunctions list-executions --state-machine-arn "$MAQUINA" \
@@ -987,7 +987,7 @@ gh workflow disable renovar-tasks.yaml
 unset CHAVE_WEBHOOK
 ```
 
-Cada execução parada vira `ABORTED` e gera um e-mail de alerta, o teste da regra. Filas, tópicos, máquina, agendas e tabela vão embora com a stack. O banco deixa um snapshot novo, como sempre.
+Cada execução parada vira `ABORTED` e gera um e-mail de alerta, o teste da regra. É a única ocasião em que uma enxurrada de alertas quer dizer que está tudo certo. Filas, tópicos, máquina, agendas e tabela vão embora com a stack. O banco deixa um snapshot novo, como sempre.
 
 ## Idempotência, peça por peça
 
@@ -1017,7 +1017,7 @@ Os serviços tornam a repetição rara e visível; quem garante que ela não cau
 
 > **Armadilha:** Mensagens grandes pelo fluxo. A entrada de uma execução do Step Functions aceita até 256 KiB, e o estado acumula o resultado de cada passo. Passe IDs e busque os dados no passo que precisa deles, como o Rangô faz.
 
-> **Na vida real:** Em 25 de novembro de 2020, o Amazon Kinesis Data Streams de us-east-1 passou boa parte do dia com falhas, depois que um aumento de capacidade da frota de front-end fez os servidores passarem do limite de threads do sistema operacional. Serviços da AWS que usam o Kinesis por dentro sofreram junto, entre eles o Cognito, o CloudWatch e o EventBridge, que entregou eventos com atraso. O barramento também é uma dependência: um fluxo que tolera atraso sobrevive a um dia assim.
+> **Na vida real:** Em 25 de novembro de 2020, o Amazon Kinesis Data Streams de us-east-1 passou boa parte do dia com falhas, depois que um aumento de capacidade da frota de front-end fez os servidores passarem do limite de threads do sistema operacional. Serviços da AWS que usam o Kinesis por dentro sofreram junto, entre eles o Cognito, o CloudWatch e o EventBridge, que entregou eventos com atraso. Até o barramento tem um barramento do qual depende; são tartarugas até lá embaixo. O barramento também é uma dependência: um fluxo que tolera atraso sobrevive a um dia assim.
 
 ## Resumo
 
@@ -1033,7 +1033,7 @@ Os serviços tornam a repetição rara e visível; quem garante que ela não cau
 
 ## Dez lugares para procurar
 
-Um cliente escreve às 21h10: o pedido levou 40 minutos para ser confirmado. Onde ficou parado? A execução do Step Functions mostra que o `ConfirmarRestaurante` demorou, mas não por quê. O log da Lambda está num grupo, o da API em outro, o do webhook num terceiro, e o Rangô já tem dez deles. A DLQ de e-mail tem sete mensagens, e você descobriu por acaso. O resumo de vendas das 11h falhou na quinta, e o Bruno avisou na sexta.
+Um cliente escreve às 21h10: o pedido levou 40 minutos para ser confirmado. Onde ficou parado? A execução do Step Functions mostra que o `ConfirmarRestaurante` demorou, mas não por quê. O log da Lambda está num grupo, o da API em outro, o do webhook num terceiro, e o Rangô já tem dez deles. A DLQ de e-mail tem sete mensagens, e você descobriu por acaso. O resumo de vendas das 11h falhou na quinta, e o Bruno avisou na sexta. Por enquanto, o sistema de monitoramento do Rangô se chama Bruno.
 
 No próximo capítulo, o Rangô ganha olhos: Amazon CloudWatch Logs e Logs Insights para consultar todos os logs de uma vez, métricas e alarmes (a DLQ, finalmente), dashboards, logs estruturados no FastAPI, tracing distribuído com AWS X-Ray e OpenTelemetry seguindo um pedido da API até o SMS, e SLOs para responder com números à pergunta que todo mundo faz primeiro: está lento para quem?
 

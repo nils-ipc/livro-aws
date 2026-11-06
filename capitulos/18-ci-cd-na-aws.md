@@ -1,36 +1,36 @@
 # CI/CD na AWS
 
-No capítulo 17, o Rangô trocou as instâncias por três serviços no Fargate. A imagem mora no ECR, com tags imutáveis que carregam o hash do commit, e o serviço da API tem circuit breaker com rollback. O deploy ficou curto: login no ECR, `buildx`, push e `cdk deploy RangoProducao -c versao_api=...`. Ao fim, a stack `RangoProducao` foi destruída e a `RangoRegistro`, com o repositório e as imagens, ficou.
+No capítulo 17, o Rangô trocou as instâncias por três serviços no Fargate. A imagem mora no ECR, com tags imutáveis que carregam o hash do commit, e o serviço da API tem circuit breaker com rollback. O deploy ficou curto: login no ECR, `buildx`, push e `cdk deploy RangoProducao -c versao_api=...`. Ao fim, a stack `RangoProducao` foi destruída e a `RangoRegistro`, com o repositório e as imagens, ficou, como a caixa de fotos de família que sobrevive a todas as mudanças de casa.
 
 ## Sexta-feira, 18h07
 
-O Bruno manda mensagem: a taxa de entrega da Sabor do Sertão aparece como R$ 6,90 no app, mas o combinado é R$ 4,50. O erro entrou no último commit, numa linha copiada da Cantina da Nona. Sábado é o dia de maior movimento, e cada pedido com a taxa errada é um cliente que desiste no checkout ou um reembolso para fazer na segunda.
+O Bruno manda mensagem: a taxa de entrega da Sabor do Sertão aparece como R$ 6,90 no app, mas o combinado é R$ 4,50. O erro entrou no último commit, numa linha copiada da Cantina da Nona. Ctrl+C e Ctrl+V: a dupla responsável por boa parte dos bugs do mundo e por quase todo o software que funciona. Sábado é o dia de maior movimento, e cada pedido com a taxa errada é um cliente que desiste no checkout ou um reembolso para fazer na segunda.
 
-A correção é uma linha. O deploy, quatro comandos. Só que os quatro comandos dependem de coisas que estão no seu notebook: a sessão SSO do profile `rango-dev`, o Docker com o `buildx` configurado para ARM, o Node com a CLI do CDK e o `cdk.context.json` atualizado. Você está no aniversário da sua sobrinha, a uma hora de casa.
+A correção é uma linha. O deploy, quatro comandos. Na teoria, coisa de cinco minutos; na prática, a teoria nunca foi a um aniversário de criança. Só que os quatro comandos dependem de coisas que estão no seu notebook: a sessão SSO do profile `rango-dev`, o Docker com o `buildx` configurado para ARM, o Node com a CLI do CDK e o `cdk.context.json` atualizado. Você está no aniversário da sua sobrinha, a uma hora de casa, e acabaram de acender as velinhas.
 
-A outra pessoa da equipe tem acesso ao repositório, mas não tem o `buildx`. Se ela conseguir configurar tudo, qual commit vai usar? O da `main`, que passou nos testes, ou o da branch dela, com a correção e mais duas mudanças pela metade? O ECR não sabe a diferença: a tag é o que a pessoa digitou.
+A outra pessoa da equipe tem acesso ao repositório, mas não tem o `buildx`. Se ela conseguir configurar tudo, qual commit vai usar? O da `main`, que passou nos testes, ou o da branch dela, com a correção e mais duas mudanças pela metade? O ECR não sabe a diferença: a tag é o que a pessoa digitou. Ele guarda o que receber, com a indiferença de um cofre que não pergunta de onde veio o conteúdo.
 
-E se a versão nova devolver erro 500 em `/restaurantes`? O `/health` não toca no banco, então o circuit breaker não percebe nada. Alguém precisa notar, descobrir a tag anterior e rodar o `cdk deploy` de novo.
+E se a versão nova devolver erro 500 em `/restaurantes`? O `/health` não toca no banco, então o circuit breaker não percebe nada. Alguém precisa notar, descobrir a tag anterior e rodar o `cdk deploy` de novo. Esse alguém, por todas as leis do universo, vai estar no meio do parabéns.
 
-O CI do capítulo 6 testa e constrói a imagem, mas joga o resultado fora junto com o runner.
+O CI do capítulo 6 testa e constrói a imagem, mas joga o resultado fora junto com o runner, como castelo de areia na maré alta.
 
 ## O pipeline completo
 
-A solução é a entrega contínua do capítulo 6, levada até o fim. Um *pipeline* recebe cada commit na `main`, roda os testes, constrói a imagem uma única vez, envia para o ECR e faz o deploy dessa imagem exata. Se você quiser um ponto de controle humano, ele vira um botão de aprovação, e não um terminal aberto.
+A solução é a entrega contínua do capítulo 6, levada até o fim. Um *pipeline* recebe cada commit na `main`, roda os testes, constrói a imagem uma única vez, envia para o ECR e faz o deploy dessa imagem exata. Se você quiser um ponto de controle humano, ele vira um botão de aprovação, e não um terminal aberto. Um botão é a interface favorita de qualquer gerente, e desta vez com razão.
 
-O Rangô já usa o GitHub, e o GitHub Actions já roda os testes. A AWS tem um serviço próprio de pipelines, o AWS CodePipeline, e vamos falar dele no fim do capítulo. Para um projeto que mora no GitHub, porém, o Actions resolve com menos peças. O ponto difícil é outro: como o runner do GitHub, uma máquina que não é sua e que só existe durante o job, prova para a AWS que pode fazer deploy?
+O Rangô já usa o GitHub, e o GitHub Actions já roda os testes. A AWS tem um serviço próprio de pipelines, o AWS CodePipeline, e vamos falar dele no fim do capítulo; como todo parente que se preze, ele chega na hora da sobremesa. Para um projeto que mora no GitHub, porém, o Actions resolve com menos peças. O ponto difícil é outro: como o runner do GitHub, uma máquina que não é sua e que só existe durante o job, prova para a AWS que pode fazer deploy? É um desconhecido batendo à porta e dizendo que veio a mando do dono da casa.
 
 ### O jeito errado de autenticar
 
-Muitos tutoriais antigos criam um usuário IAM, geram uma access key e guardam o par `AKIA...` nos *secrets* do repositório. O próprio README da action de deploy do ECS ainda mostra os parâmetros `aws-access-key-id` e `aws-secret-access-key`.
+Muitos tutoriais antigos criam um usuário IAM, geram uma access key e guardam o par `AKIA...` nos *secrets* do repositório. Esses tutoriais seguem vivos porque a internet nunca apaga nada, principalmente o que deveria. O próprio README da action de deploy do ECS ainda mostra os parâmetros `aws-access-key-id` e `aws-secret-access-key`.
 
-Funciona, e é o problema do capítulo 8. A chave não expira e vale para quem a tiver. Uma action de terceiros comprometida ou um `run: env` esquecido num passo de debug a vazam, e você só descobre pela fatura.
+Funciona, e é o problema do capítulo 8. A chave não expira e vale para quem a tiver. Uma action de terceiros comprometida ou um `run: env` esquecido num passo de debug a vazam, e você só descobre pela fatura. Access key nos secrets do repositório é a chave reserva debaixo do tapete: todo mundo sabe onde procurar.
 
 ### OIDC, ou o crachá emitido na hora
 
-O GitHub resolve isso com OIDC (*OpenID Connect*). A cada job, o GitHub pode emitir um token assinado, um JWT, que diz quem está rodando: qual repositório, qual branch, qual environment, qual evento disparou o workflow. É o mesmo tipo de token que o "Entrar com Google" entrega ao seu backend para provar a identidade de um usuário.
+O GitHub resolve isso com OIDC (*OpenID Connect*). A cada job, o GitHub pode emitir um token assinado, um JWT, que diz quem está rodando: qual repositório, qual branch, qual environment, qual evento disparou o workflow. É o mesmo tipo de token que o "Entrar com Google" entrega ao seu backend para provar a identidade de um usuário, aquele botão que poupou a humanidade de criar a senha número 347.
 
-A AWS, por sua vez, sabe confiar em quem emite esses tokens. Você cadastra o GitHub como provedor de identidade no IAM e cria uma role cuja trust policy diz: aceito tokens emitidos por `token.actions.githubusercontent.com`, desde que tragam estas informações. O runner apresenta o token ao STS com a chamada `AssumeRoleWithWebIdentity` e recebe credenciais temporárias, as `ASIA...` do capítulo 8, que valem uma hora.
+A AWS, por sua vez, sabe confiar em quem emite esses tokens. É uma relação de confiança mais saudável do que muitas por aí, baseada em assinatura conferida e não em promessa. Você cadastra o GitHub como provedor de identidade no IAM e cria uma role cuja trust policy diz: aceito tokens emitidos por `token.actions.githubusercontent.com`, desde que tragam estas informações. O runner apresenta o token ao STS com a chamada `AssumeRoleWithWebIdentity` e recebe credenciais temporárias, as `ASIA...` do capítulo 8, que valem uma hora.
 
 O fluxo inteiro fica assim:
 
@@ -47,7 +47,7 @@ O fluxo inteiro fica assim:
        |<-- credenciais temporárias (ASIA..., 1 h) ----------------|
 ```
 
-Nenhum segredo fica guardado no GitHub. Não há nada para vazar além de um token que expira em minutos e de credenciais que expiram em uma hora.
+Nenhum segredo fica guardado no GitHub. Não há nada para vazar além de um token que expira em minutos e de credenciais que expiram em uma hora. É como perder um bilhete de metrô já usado: quem achar não vai longe.
 
 A parte que exige atenção está na trust policy. Ela precisa conferir dois campos do token. O `aud`, a audiência, tem de ser `sts.amazonaws.com`. O `sub`, o assunto, diz de onde o job veio, e o formato depende do contexto:
 
@@ -57,11 +57,11 @@ A parte que exige atenção está na trust policy. Ela precisa conferir dois cam
 | job com `environment: producao` | `repo:SEU-USUARIO/rango:environment:producao` |
 | pull request | `repo:SEU-USUARIO/rango:pull_request` |
 
-Se a trust policy não conferir o `sub`, qualquer repositório do GitHub, de qualquer pessoa, consegue assumir a sua role, porque o token dele é assinado pela mesma chave do GitHub que o seu.
+Se a trust policy não conferir o `sub`, qualquer repositório do GitHub, de qualquer pessoa, consegue assumir a sua role, porque o token dele é assinado pela mesma chave do GitHub que o seu. Inclusive o `hello-world` de um desconhecido do outro lado do planeta.
 
 > **Armadilha:** O GitHub passou a usar um formato novo de `sub` com IDs numéricos imutáveis, como `repo:octo-org@123456/octo-repo@456789:ref:refs/heads/main`, para repositórios criados a partir de 15 de julho de 2026 ou que fizeram opt-in. Se o seu repositório está nesse grupo, a condição com o formato antigo nunca casa, e o job falha com `Not authorized to perform sts:AssumeRoleWithWebIdentity`. Confira o formato que vale para o seu repositório na documentação do GitHub antes de escrever a condição.
 
-## Mão na massa
+## Na prática
 
 O plano é este:
 
@@ -74,9 +74,9 @@ Pré-requisitos: o repositório `rango-infra/` do capítulo 17, a stack `RangoRe
 
 ### Duas roles, dois crachás
 
-Por que duas? O pipeline faz duas coisas com riscos diferentes. Enviar uma imagem ao ECR acontece a cada push na `main` e só mexe no repositório de imagens. Fazer deploy muda a produção e deve passar pela aprovação. Cada uma ganha a sua role, e cada role aceita um `sub` diferente.
+Por que duas? O pipeline faz duas coisas com riscos diferentes. Enviar uma imagem ao ECR acontece a cada push na `main` e só mexe no repositório de imagens. Fazer deploy muda a produção e deve passar pela aprovação. Cada uma ganha a sua role, e cada role aceita um `sub` diferente. É a mesma lógica de não entregar a chave do cofre para quem só veio regar as plantas.
 
-Crie `rango_infra/pipeline_stack.py`:
+As duas moram em `rango_infra/pipeline_stack.py`:
 
 ```python
 from aws_cdk import Stack, aws_ecr as ecr, aws_iam as iam
@@ -151,11 +151,11 @@ class PipelineStack(Stack):
         )
 ```
 
-O `OpenIdConnectProvider` cadastra o GitHub no IAM; existe um por URL em cada conta. O `OpenIdConnectPrincipal` monta a trust policy com a ação `sts:AssumeRoleWithWebIdentity` e as duas condições com `StringEquals`. Você vai ver exemplos com `StringLike` e `repo:ORG/REPO:*`. O asterisco aceita qualquer branch, pull request ou environment do repositório, inclusive a branch que alguém criou ontem para testar uma ideia.
+O `OpenIdConnectProvider` cadastra o GitHub no IAM; existe um por URL em cada conta. O `OpenIdConnectPrincipal` monta a trust policy com a ação `sts:AssumeRoleWithWebIdentity` e as duas condições com `StringEquals`. Você vai ver exemplos com `StringLike` e `repo:ORG/REPO:*`. O asterisco aceita qualquer branch, pull request ou environment do repositório, inclusive a branch que alguém criou ontem para testar uma ideia e batizou de `teste-nao-mexer`.
 
 A `role_imagem` recebe o login no ECR, o envio de camadas e manifestos ao `rango-api` e o `DescribeImages`, que o workflow usa para saber se uma tag já existe.
 
-A `role_deploy` pede mais cuidado, porque o `cdk deploy` cria VPC, banco e roles IAM. Muitos guias dão `AdministratorAccess` à role do GitHub. O caminho mais estreito usa as roles que o bootstrap do capítulo 15 criou, com o qualificador padrão `hnb659fds` no nome: `cdk-hnb659fds-deploy-role-...`, `...-file-publishing-role-...`, `...-image-publishing-role-...` e `...-lookup-role-...`. A CLI do CDK assume essas roles sozinha; a role do GitHub só precisa de permissão para assumi-las.
+A `role_deploy` pede mais cuidado, porque o `cdk deploy` cria VPC, banco e roles IAM. Muitos guias dão `AdministratorAccess` à role do GitHub, o que equivale a entregar a chave mestra do prédio ao motoboy que veio trazer o pedido. O caminho mais estreito usa as roles que o bootstrap do capítulo 15 criou, com o qualificador padrão `hnb659fds` no nome: `cdk-hnb659fds-deploy-role-...`, `...-file-publishing-role-...`, `...-image-publishing-role-...` e `...-lookup-role-...`. A CLI do CDK assume essas roles sozinha; a role do GitHub só precisa de permissão para assumi-las.
 
 Isso desloca o risco em vez de eliminá-lo. A role de execução do bootstrap continua administradora, como o capítulo 15 avisou. A proteção está em quem assume a `role_deploy`: só um job no environment `producao`, a partir da `main`, depois de uma aprovação. O capítulo 23 volta a isso com contas separadas.
 
@@ -169,13 +169,13 @@ from rango_infra.pipeline_stack import PipelineStack
 PipelineStack(app, "RangoPipeline", repositorio_github="SEU-USUARIO/rango", env=env)
 ```
 
-Troque `SEU-USUARIO` pelo dono do repositório, respeitando maiúsculas e minúsculas, e faça o deploy a partir do notebook:
+Com `SEU-USUARIO` trocado pelo dono do repositório, respeitando maiúsculas e minúsculas, o deploy sai do notebook:
 
 ```bash
 cdk deploy RangoPipeline -c versao_api=nenhuma
 ```
 
-O `-c versao_api=nenhuma` existe porque o CDK sintetiza o app inteiro, e a `RangoProducao` precisa de algum valor para a tag, mesmo sem ser implantada. Este é o último deploy que sai do seu terminal, e só podia ser este: a role que autoriza o pipeline não pode ser criada pelo próprio pipeline.
+O `-c versao_api=nenhuma` existe porque o CDK sintetiza o app inteiro, e a `RangoProducao` precisa de algum valor para a tag, mesmo sem ser implantada. Este é o último deploy que sai do seu terminal, e só podia ser este: a role que autoriza o pipeline não pode ser criada pelo próprio pipeline. O Barão de Münchhausen, na lenda, saiu do pântano puxando os próprios cabelos; na AWS, esse truque não funciona.
 
 ### A produção abre a porta do front
 
@@ -188,19 +188,19 @@ O conteúdo do front fica fora da stack desde o capítulo 15. Quem vai enviá-lo
         distribuicao.grant_create_invalidation(role_pipeline)
 ```
 
-Os `grant_*` criam uma policy dentro da `RangoProducao` e a anexam à role importada; quando a stack for destruída, a policy vai junto. O `grant_read` traz o `s3:ListBucket`, de que o `aws s3 sync` precisa. Nenhum `grant` permite apagar, já que o deploy do front nunca usa `--delete` (capítulo 14).
+Os `grant_*` criam uma policy dentro da `RangoProducao` e a anexam à role importada; quando a stack for destruída, a policy vai junto. O `grant_read` traz o `s3:ListBucket`, de que o `aws s3 sync` precisa. Nenhum `grant` permite apagar, já que o deploy do front nunca usa `--delete` (capítulo 14). Pipeline que não consegue apagar nada é pipeline que não vira notícia.
 
-É nesses passos fora do CDK que os pipelines quebram com `AccessDenied`: o `cdk deploy` passa, com as roles do bootstrap, e o `aws s3 sync` seguinte falha, porque roda com a role do GitHub.
+É nesses passos fora do CDK que os pipelines quebram com `AccessDenied`: o `cdk deploy` passa, com as roles do bootstrap, e o `aws s3 sync` seguinte falha, porque roda com a role do GitHub. Costuma acontecer depois de quinze minutos de deploy bem-sucedido, para dar tempo de você criar esperança.
 
 ### Blue/green na API
 
-O deploy *rolling* do capítulo 17 tem um circuit breaker que volta atrás quando as tasks novas não ficam de pé. Quando elas ficam de pé e respondem errado, que é a história da sexta-feira, ele não faz nada.
+O deploy *rolling* do capítulo 17 tem um circuit breaker que volta atrás quando as tasks novas não ficam de pé. Quando elas ficam de pé e respondem errado, que é a história da sexta-feira, ele não faz nada. É o airbag que só abre depois que o carro já foi para o ferro-velho.
 
-O ECS tem quatro estratégias de deploy: rolling (o padrão), blue/green, canary e linear, estas duas desde outubro de 2025. No blue/green, a versão atual (azul) continua atendendo enquanto a nova (verde) sobe inteira num segundo target group. O ALB tem uma regra de produção e uma de teste. A de teste manda tráfego ao verde primeiro, para você conferir antes de qualquer cliente. Depois o ECS vira a regra de produção para o verde de uma vez, e começa o *bake time*: azul e verde rodam juntos por um período configurável. Se um alarme do CloudWatch disparar nessa janela, o tráfego volta ao azul, que ainda está de pé, no tempo de trocar o peso de uma regra.
+O ECS tem quatro estratégias de deploy: rolling (o padrão), blue/green, canary e linear, estas duas desde outubro de 2025. No blue/green, a versão atual (azul) continua atendendo enquanto a nova (verde) sobe inteira num segundo target group. O ALB tem uma regra de produção e uma de teste. A de teste manda tráfego ao verde primeiro, para você conferir antes de qualquer cliente. Depois o ECS vira a regra de produção para o verde de uma vez, e começa o *bake time*, nome que vem da cozinha, com a ideia junto: o bolo fica mais um pouco no forno antes de alguém declarar que está pronto. No bake time, azul e verde rodam juntos por um período configurável. Se um alarme do CloudWatch disparar nessa janela, o tráfego volta ao azul, que ainda está de pé, no tempo de trocar o peso de uma regra.
 
-O deploy passa por estágios que aparecem no console, como `TEST_TRAFFIC_SHIFT` e `PRODUCTION_TRAFFIC_SHIFT`. Em vários deles cabe um *lifecycle hook*: uma função Lambda que decide se o deploy continua, ou uma pausa que espera alguém chamar `ContinueServiceDeployment`. Um hook no `POST_TEST_TRAFFIC_SHIFT` com testes de fumaça é o próximo passo natural; para o Rangô, o alarme basta por enquanto. O custo do bake time é dobrar as tasks durante a janela, frações de centavo por deploy.
+O deploy passa por estágios que aparecem no console, como `TEST_TRAFFIC_SHIFT` e `PRODUCTION_TRAFFIC_SHIFT`. Em vários deles cabe um *lifecycle hook*: uma função Lambda que decide se o deploy continua, ou uma pausa que espera alguém chamar `ContinueServiceDeployment`. Um hook no `POST_TEST_TRAFFIC_SHIFT` com testes de fumaça é o próximo passo natural (na eletrônica, o teste de fumaça era literal: ligar o aparelho e ver se saía fumaça); para o Rangô, o alarme basta por enquanto. O custo do bake time é dobrar as tasks durante a janela, frações de centavo por deploy.
 
-O `ApplicationLoadBalancedFargateService` do capítulo 17 cria um target group só. Para ter dois, e regras de listener, a API sai do pattern. Apague o bloco `api = ecs_patterns...` com o health check e a escala que vinham depois, e o import de `aws_ecs_patterns`. Acrescente `aws_cloudwatch as cloudwatch`. Primeiro, o ALB e as regras:
+O `ApplicationLoadBalancedFargateService` do capítulo 17 cria um target group só. Para ter dois, e regras de listener, a API sai do pattern. Os patterns são ótimos até o dia em que você precisa de algo que eles não previram, e esse dia sempre chega. Saem o bloco `api = ecs_patterns...` com o health check e a escala que vinham depois, e o import de `aws_ecs_patterns`. Entra `aws_cloudwatch as cloudwatch`. Primeiro, o ALB e as regras:
 
 ```python
         alb = elbv2.ApplicationLoadBalancer(
@@ -265,7 +265,7 @@ O `ApplicationLoadBalancedFargateService` do capítulo 17 cria um target group s
 
 Os target groups repetem o health check do capítulo 13, e o `add_redirect` recria o redirecionamento da porta 80. As regras são avaliadas da menor prioridade para a maior: com o cabeçalho `X-Rango-Teste: verde`, a requisição cai na regra de teste; o resto cai na de produção. As duas começam com 100% no azul, e o ECS muda os pesos durante o deploy.
 
-A regra de teste fica no listener público, e quem descobrir o cabeçalho alcança a versão verde durante um deploy. Como ela é o próximo código de produção, isso expõe pouco; rotas que ainda não podem ser vistas pedem uma feature flag (capítulo 6).
+A regra de teste fica no listener público, e quem descobrir o cabeçalho alcança a versão verde durante um deploy, uma espécie de easter egg involuntário para curiosos. Como ela é o próximo código de produção, isso expõe pouco; rotas que ainda não podem ser vistas pedem uma feature flag (capítulo 6).
 
 Agora o alarme que decide a volta, a task definition e o serviço:
 
@@ -336,7 +336,7 @@ Agora o alarme que decide a volta, a task definition e o serviço:
         api.node.add_dependency(rotacao, *endpoints)
 ```
 
-O alarme dispara com dez ou mais respostas 5xx das tasks num minuto. O `NOT_BREACHING` trata minuto sem dados como normal, porque minuto sem erro não gera ponto na métrica. O número 10 é um ponto de partida; o capítulo 22 troca contagens por taxas e SLOs. O `deployment_alarms` faz o ECS observar o alarme durante o deploy e o bake time, e o `ROLLBACK_ON_ALARM` devolve o tráfego ao azul. O circuit breaker fica para a task que nem sobe.
+O alarme dispara com dez ou mais respostas 5xx das tasks num minuto. O `NOT_BREACHING` trata minuto sem dados como normal, porque minuto sem erro não gera ponto na métrica. O número 10 é um ponto de partida, escolhido com o rigor científico de quem chuta um número redondo e promete revisar depois; o capítulo 22 troca contagens por taxas e SLOs. O `deployment_alarms` faz o ECS observar o alarme durante o deploy e o bake time, e o `ROLLBACK_ON_ALARM` devolve o tráfego ao azul. O circuit breaker fica para a task que nem sobe.
 
 O `load_balancer_target` com o `AlternateTarget` registra as tasks no azul e entrega ao ECS o verde e as duas regras. Para mexer nelas, o ECS usa uma role de infraestrutura com a policy gerenciada `AmazonECSInfrastructureRolePolicyForLoadBalancers`, que o CDK cria sozinho.
 
@@ -356,20 +356,20 @@ Por fim, o registro `api.rango.com.br` volta a ser explícito, como no capítulo
 
 Os workers continuam com o deploy rolling. Eles não recebem tráfego HTTP, então não há o que testar antes nem para onde devolver.
 
-Antes do commit, rode um `cdk synth` local para que o lookup da zona volte ao `cdk.context.json`, apagado no fim do capítulo 17, e faça commit desse arquivo. Sem ele, o pipeline usa a lookup role do bootstrap a cada execução. Funciona, mas o template passa a depender do que a conta responde naquele momento.
+Antes do commit, um `cdk synth` local devolve o lookup da zona ao `cdk.context.json`, apagado no fim do capítulo 17, e esse arquivo entra no commit. Sem ele, o pipeline usa a lookup role do bootstrap a cada execução. Funciona, mas o template passa a depender do que a conta responde naquele momento.
 
 ### O environment no GitHub
 
-O `sub` da role de deploy fala de um environment chamado `producao`. No GitHub, um *environment* é um alvo de deploy com regras próprias. Crie o seu em Settings → Environments → New environment, com o nome `producao`, e configure duas regras:
+O `sub` da role de deploy fala de um environment chamado `producao`. No GitHub, um *environment* é um alvo de deploy com regras próprias. O do Rangô nasce em Settings → Environments → New environment, com o nome `producao`, e recebe duas regras:
 
 - **Required reviewers**: o seu usuário. O job que usar esse environment para e espera alguém aprovar.
 - **Deployment branches and tags**: "Selected branches and tags", com a regra `main`.
 
-A segunda regra é a que fecha a porta. O `sub` diz qual environment o job declarou, e não qual branch o disparou. Sem a restrição, alguém com permissão de push cria uma branch, escreve um workflow com `environment: producao` e recebe as credenciais de deploy. Com a restrição, o GitHub recusa o job antes de emitir o token.
+A segunda regra é a que fecha a porta. Sem ela, o environment é uma catraca com placa de "proibido passar" e nenhuma trava. O `sub` diz qual environment o job declarou, e não qual branch o disparou. Sem a restrição, alguém com permissão de push cria uma branch, escreve um workflow com `environment: producao` e recebe as credenciais de deploy. Com a restrição, o GitHub recusa o job antes de emitir o token.
 
 > **Armadilha:** Em repositórios privados, as regras de proteção de environment dependem do plano do GitHub. Confira se as suas aparecem na tela antes de contar com elas, porque o `sub` com environment sem a regra de branch é quase tão frouxo quanto um curinga.
 
-Guarde também o ID da conta numa variável do repositório. Ele dispensa sigilo, e assim o ARN das roles não fica repetido no workflow:
+O ID da conta também fica numa variável do repositório. Ele dispensa sigilo (sozinho, o ID da conta abre tantas portas quanto o número do seu sapato), e assim o ARN das roles não fica repetido no workflow:
 
 ```bash
 gh variable set AWS_ACCOUNT_ID --body "123456789012"
@@ -482,21 +482,21 @@ jobs:
             --distribution-id "$(saida DistribuicaoId)" --paths "/index.html"
 ```
 
-Vamos por partes, porque cada linha tem um motivo.
+Vamos por partes, como diria Jack, o Estripador, porque cada linha tem um motivo.
 
-O `id-token: write` autoriza o job a pedir o JWT ao GitHub e nada mais; quem decide o acesso é a trust policy. O job `testes` não pede essa permissão, então um teste comprometido nem consegue tentar.
+O `id-token: write` autoriza o job a pedir o JWT ao GitHub e nada mais; quem decide o acesso é a trust policy. O job `testes` não pede essa permissão, então um teste comprometido nem consegue tentar. Teste mal-intencionado é o pior tipo de teste, logo depois do teste que passa sempre.
 
 O `VERSAO` é o hash completo do commit, que o capítulo 6 já usava como tag; as imagens de hash curto do capítulo 17 convivem com ele. Num disparo manual, o `inputs.versao` toma o lugar do hash, e isso vai servir para voltar versões.
 
 O job `imagem` roda no runner `ubuntu-24.04-arm`, disponível em repositórios privados desde janeiro de 2026, com duas vCPUs e consumindo os minutos do plano. Na máquina arm64, um `docker build` comum gera a imagem do Graviton, sem `buildx` nem emulação. A checagem antes do build existe por causa das tags imutáveis: num re-run do mesmo commit, o push falharia com `ImageTagAlreadyExistsException`, e a imagem que já está lá é, por definição, a mesma.
 
-O `environment: producao` muda o `sub` do token e faz o GitHub pedir aprovação. O `concurrency: producao` enfileira deploys: se chega um terceiro commit, o GitHub descarta o que esperava e fica com o mais novo.
+O `environment: producao` muda o `sub` do token e faz o GitHub pedir aprovação. O `concurrency: producao` enfileira deploys: se chega um terceiro commit, o GitHub descarta o que esperava e fica com o mais novo. Na fila do pipeline, quem chega por último fura a fila, e todo mundo acha justo.
 
-A `configure-aws-credentials` está na versão 6, que roda em Node 24; exemplos com `@v1`, `@v2` ou `@v4` estão defasados, e runners próprios precisam do agente 2.327.1 ou mais novo. Ela pede o token, chama o STS e exporta as credenciais como variáveis de ambiente, onde a CLI e o CDK as encontram.
+A `configure-aws-credentials` está na versão 6, que roda em Node 24; exemplos com `@v1`, `@v2` ou `@v4` estão defasados (tutorial de internet envelhece mais rápido que banana na fruteira), e runners próprios precisam do agente 2.327.1 ou mais novo. Ela pede o token, chama o STS e exporta as credenciais como variáveis de ambiente, onde a CLI e o CDK as encontram.
 
-O `cdk deploy` recebe as stacks pelo nome em vez de `--all`, que incluiria a `RangoPipeline`: um commit que ampliasse a `role_deploy` seria aplicado pela própria `role_deploy`. O `--require-approval never` desliga a pergunta sobre mudanças de IAM, que travaria o job; a aprovação humana já aconteceu no environment.
+O `cdk deploy` recebe as stacks pelo nome em vez de `--all`, que incluiria a `RangoPipeline`: um commit que ampliasse a `role_deploy` seria aplicado pela própria `role_deploy`, como funcionário assinando o próprio aumento. O `--require-approval never` desliga a pergunta sobre mudanças de IAM, que travaria o job; a aprovação humana já aconteceu no environment.
 
-O passo do front é o do capítulo 14 com as saídas da stack, e só roda em push, para que voltar a API não mexa no front. As primeiras 1.000 invalidações de caminho por mês são gratuitas, somando todas as distribuições da conta, e `/*` conta como um caminho (us-east-1, outubro de 2026; confira a página de preços). Um caminho por deploy fica longe disso.
+O passo do front é o do capítulo 14 com as saídas da stack, e só roda em push, para que voltar a API não mexa no front. As primeiras 1.000 invalidações de caminho por mês são gratuitas, somando todas as distribuições da conta, e `/*` conta como um caminho (us-east-1, outubro de 2026; confira a página de preços). Um caminho por deploy fica longe disso, a não ser que o Bruno descubra que pode pedir uma cor nova de botão a cada hora.
 
 > **Dica:** Os exemplos acima usam tags como `@v6` para facilitar a leitura. A documentação do GitHub sobre OIDC na AWS fixa as actions pelo hash do commit (`uses: aws-actions/configure-aws-credentials@<hash de 40 caracteres>`), e você deve fazer o mesmo, inclusive no `ci.yaml` do capítulo 6. Uma tag pode ser movida para outro commit por quem controla o repositório da action; um hash não. O Dependabot sabe atualizar actions fixadas por hash e abre pull requests quando sai versão nova.
 
@@ -504,17 +504,17 @@ O passo do front é o do capítulo 14 com as saídas da stack, e só roda em pus
 
 A AWS mantém duas actions para o ECS: `amazon-ecs-render-task-definition`, que troca a imagem num JSON de task definition, e `amazon-ecs-deploy-task-definition`, hoje na versão 2, que registra a revisão nova e atualiza o serviço. Ela aceita `task-definition`, `service`, `cluster` e `wait-for-service-stability: true`, e o README mostra o fluxo completo: credenciais, login no ECR, build e push com a tag `${{ github.sha }}`, render e deploy.
 
-É um bom caminho quando infraestrutura e aplicação têm donos separados. No Rangô, a task definition pertence ao CDK. Revisões registradas por fora seriam o drift do capítulo 15: no próximo `cdk deploy`, a tag antiga voltaria para produção sem ninguém pedir.
+É um bom caminho quando infraestrutura e aplicação têm donos separados, cada um com opiniões muito firmes sobre o outro. No Rangô, a task definition pertence ao CDK. Revisões registradas por fora seriam o drift do capítulo 15: no próximo `cdk deploy`, a tag antiga voltaria para produção sem ninguém pedir, como aquele bug que você jura que já corrigiu.
 
 ### O primeiro deploy pelo pipeline
 
-Faça commit de tudo (a stack nova, as mudanças na produção, o `cdk.context.json` e o workflow) e envie para a `main`. Em vez de abrir a aba Actions, acompanhe pelo terminal:
+Com tudo no commit (a stack nova, as mudanças na produção, o `cdk.context.json` e o workflow) e enviado para a `main`, o acompanhamento pode ser pelo terminal, em vez da aba Actions:
 
 ```bash
 gh run watch
 ```
 
-Os testes passam, a imagem é construída e enviada, e o job `deploy` para com o status "Waiting". O GitHub manda um e-mail pedindo a revisão. Aprove pela página do run ou pela linha de comando:
+Os testes passam, a imagem é construída e enviada, e o job `deploy` para com o status "Waiting". O GitHub manda um e-mail pedindo a revisão. Pela primeira vez na história, um e-mail automático do GitHub vai ser lido com atenção. A aprovação é feita pela página do run, que também abre a partir da linha de comando:
 
 ```bash
 gh run view --web
@@ -522,7 +522,7 @@ gh run view --web
 
 Este primeiro deploy cria a produção do zero, com o banco restaurado do snapshot, e leva os 15 a 20 minutos de sempre. Repare no que aparece no log do passo de infraestrutura: as credenciais usadas são da role `rango-github-deploy`, e a CLI do CDK anuncia que vai assumir a `cdk-hnb659fds-deploy-role`.
 
-Como no capítulo 17, a primeira rotação do segredo corre em paralelo com a subida das tasks. Espere ela terminar e force tasks novas, agora com a permissão que a `role_deploy` tem no cluster. Isso nos leva à pendência do capítulo 17: a task que vive mais que duas rotações perde o acesso ao banco, e o `--force-new-deployment` semanal precisava de alguém para lembrar. Um segundo workflow, `.github/workflows/renovar-tasks.yaml`, lembra por você:
+Como no capítulo 17, a primeira rotação do segredo corre em paralelo com a subida das tasks. A saída é esperar ela terminar e forçar tasks novas, agora com a permissão que a `role_deploy` tem no cluster. Isso nos leva à pendência do capítulo 17: a task que vive mais que duas rotações perde o acesso ao banco, e o `--force-new-deployment` semanal precisava de alguém para lembrar. Um segundo workflow, `.github/workflows/renovar-tasks.yaml`, lembra por você, e não adia, ao contrário do lembrete no celular que você já empurrou dezessete vezes:
 
 ```yaml
 # .github/workflows/renovar-tasks.yaml
@@ -557,11 +557,11 @@ jobs:
           done
 ```
 
-Toda segunda-feira às 9h em UTC (6h em Brasília), as tasks são trocadas e leem o segredo atual. Acrescente à `role_deploy` um statement com `ecs:ListServices` e `resources=["*"]`, e refaça o deploy manual da `RangoPipeline`. Este job também pede aprovação; se incomodar, dê a ele um environment e uma role próprios, só com essas duas ações.
+Toda segunda-feira às 9h em UTC (6h em Brasília), as tasks são trocadas e leem o segredo atual, num horário em que quase nenhum cliente pede comida e nenhum humano está acordado para reclamar. Para isso, a `role_deploy` ganha um statement com `ecs:ListServices` e `resources=["*"]`, aplicado com um novo deploy manual da `RangoPipeline`. Este job também pede aprovação; se incomodar, a saída é dar a ele um environment e uma role próprios, só com essas duas ações.
 
 ### A correção do Bruno, pelo celular
 
-Volte à sexta-feira. A correção da taxa vai num pull request:
+De volta à sexta-feira. A correção da taxa vai num pull request:
 
 ```bash
 git switch -c corrige-taxa-sertao
@@ -571,7 +571,7 @@ git push -u origin corrige-taxa-sertao
 gh pr create --fill
 ```
 
-O job `testes` roda no pull request. Os jobs `imagem` e `deploy` aparecem como ignorados, por causa do `if` e do `needs`. A outra pessoa da equipe revisa, aprova e faz o merge pelo navegador. O push na `main` dispara o pipeline. Você recebe o e-mail de aprovação antes do bolo, abre o link no celular e aprova.
+O job `testes` roda no pull request. Os jobs `imagem` e `deploy` aparecem como ignorados, por causa do `if` e do `needs`. A outra pessoa da equipe revisa, aprova e faz o merge pelo navegador. O push na `main` dispara o pipeline. Você recebe o e-mail de aprovação antes do bolo, abre o link no celular e aprova, e ainda sobra tempo para garantir o último pedaço de bolo.
 
 Enquanto o deploy roda, a regra de teste já mostra a versão verde. Qualquer um com o `curl` pode conferir antes da troca:
 
@@ -588,13 +588,13 @@ aws ecs list-service-deployments --cluster rango-producao \
   --query "serviceDeployments[0].[status,targetServiceRevisionArn]"
 ```
 
-Durante os dez minutos de bake time, o status fica `IN_PROGRESS` e o serviço tem quatro tasks. Depois, as azuis são drenadas, o status vira `SUCCESSFUL` e o `cdk deploy` termina. O job inteiro leva uns 15 minutos, a maior parte esperando o bake time. Ninguém abriu um terminal.
+Durante os dez minutos de bake time, o status fica `IN_PROGRESS` e o serviço tem quatro tasks. Depois, as azuis são drenadas, o status vira `SUCCESSFUL` e o `cdk deploy` termina. O job inteiro leva uns 15 minutos, a maior parte esperando o bake time. Ninguém abriu um terminal. O notebook passou a noite fechado, que é onde notebook deve ficar numa festa de aniversário.
 
 ### Quando a versão nova quebra
 
-Agora o teste que interessa: uma versão que sobe, passa no `/health` e devolve erro. Numa branch de teste, troque o nome de uma coluna na consulta de `/restaurantes`, para que o Postgres responda `column "taxa_entrga" does not exist`. Faça o merge e aprove o deploy.
+Agora o teste que interessa: uma versão que sobe, passa no `/health` e devolve erro. Numa branch de teste, alguém troca o nome de uma coluna na consulta de `/restaurantes`, para que o Postgres responda `column "taxa_entrga" does not exist`, faz o merge e aprova o deploy. É o tipo de erro de digitação que o corretor do celular conserta e o Postgres não perdoa.
 
-Durante o bake time, gere tráfego. O script do k6 do capítulo 13 serve, ou um laço simples:
+Durante o bake time, entra tráfego. O script do k6 do capítulo 13 serve, ou um laço simples:
 
 ```bash
 for i in $(seq 1 300); do
@@ -610,7 +610,7 @@ done | sort | uniq -c
 
 Em um ou dois minutos, o alarme `ErrosApi` passa para `ALARM`. O ECS devolve a regra de produção ao azul, e os 500 param. Os sucessos do resultado são as respostas que chegaram depois da volta, já servidas pelas tasks azuis. O deploy termina como `ROLLBACK_SUCCESSFUL`, o CloudFormation reverte a stack para a revisão anterior da task definition, o `cdk deploy` sai com erro e o run fica vermelho no GitHub.
 
-O vermelho é o aviso. Na versão do capítulo 17, ninguém teria percebido até um cliente reclamar.
+O vermelho é o aviso. Na versão do capítulo 17, ninguém teria percebido até um cliente reclamar, e cliente reclamando tem um alcance que nenhum alarme do CloudWatch consegue igualar.
 
 Para os casos que o alarme não pega, voltar uma versão é rodar o mesmo pipeline com uma tag antiga:
 
@@ -620,44 +620,44 @@ gh workflow run ci -f versao=3f9c2b1e8d7a6c5b4a39281706f5e4d3c2b1a098
 
 Os testes rodam sobre a `main`, o job `imagem` encontra a tag no ECR e não constrói nada, e o `deploy` aplica a infraestrutura atual com a imagem antiga, em blue/green, depois da aprovação. O hash vem do histórico de runs ou do `git log`. As 30 imagens que o lifecycle do ECR guarda são as suas versões disponíveis para voltar.
 
-Voltar a imagem não desfaz uma migration de banco. Se a versão nova renomeou uma coluna, a antiga vai procurar a coluna com o nome antigo e falhar. É por isso que o capítulo 6 insistiu no expand/contract: cada deploy precisa funcionar com o esquema do deploy anterior e do seguinte.
+Voltar a imagem não desfaz uma migration de banco. Se a versão nova renomeou uma coluna, a antiga vai procurar a coluna com o nome antigo e falhar. É por isso que o capítulo 6 insistiu no expand/contract: cada deploy precisa funcionar com o esquema do deploy anterior e do seguinte. Máquina do tempo para código existe; para banco de dados, ainda não inventaram.
 
 ### Desligar sem deixar o pipeline religar
 
-Destrua a produção a partir do notebook, como nos capítulos anteriores:
+A produção é destruída a partir do notebook, como nos capítulos anteriores:
 
 ```bash
 cdk destroy RangoProducao -c versao_api=nenhuma
 ```
 
-O banco sai com snapshot final; atualize o nome no `app.py` e faça commit quando for subir de novo. A `RangoRegistro` e a `RangoPipeline` ficam. O provedor OIDC e as roles não custam nada.
+O banco sai com snapshot final; o nome dele vai para o `app.py`, num commit, quando a produção for subir de novo. A `RangoRegistro` e a `RangoPipeline` ficam. O provedor OIDC e as roles não custam nada, uma das raras frases sobre a AWS que dispensam asterisco.
 
-Há um detalhe novo. Com a produção destruída, qualquer push na `main` recria tudo, com banco e NAT de endpoints cobrando por hora. Desligue os workflows enquanto estiver estudando outra coisa:
+Há um detalhe novo. Com a produção destruída, qualquer push na `main` recria tudo, com banco e NAT de endpoints cobrando por hora. Um commit inocente que corrige uma vírgula no README vira uma produção inteira ligada. Por isso os workflows ficam desligados enquanto você estuda outra coisa:
 
 ```bash
 gh workflow disable ci
 gh workflow disable renovar-tasks
 ```
 
-E religue com `gh workflow enable` quando quiser a produção de volta.
+E voltam com `gh workflow enable` quando a produção precisar voltar.
 
 ## E o CodePipeline?
 
 O AWS CodePipeline é o orquestrador de pipelines da AWS. Ele encadeia estágios (origem, build, aprovação, deploy) e delega o trabalho a outros serviços: o AWS CodeBuild roda os comandos, como o runner do GitHub, e o deploy pode ir direto para o ECS, para o CloudFormation ou para um bucket. O código pode vir do GitHub, por meio de uma conexão autorizada uma vez no console.
 
-Ele tem dois tipos de pipeline com cobranças diferentes (us-east-1, outubro de 2026; confira a página oficial). O V1 custa US$ 1,00 por mês por pipeline ativo, sendo ativo o pipeline com mais de 30 dias e pelo menos uma mudança no mês; o primeiro é gratuito no free tier. O V2 cobra US$ 0,002 por minuto de execução de ação, arredondado para cima, com 100 minutos gratuitos por mês, e a aprovação manual não conta. Nos dois, CodeBuild, S3 e outros serviços usados são cobrados à parte.
+Ele tem dois tipos de pipeline com cobranças diferentes (us-east-1, outubro de 2026; confira a página oficial). O V1 custa US$ 1,00 por mês por pipeline ativo, sendo ativo o pipeline com mais de 30 dias e pelo menos uma mudança no mês; o primeiro é gratuito no free tier. O V2 cobra US$ 0,002 por minuto de execução de ação, arredondado para cima, com 100 minutos gratuitos por mês, e a aprovação manual não conta, o que é ótimo, porque humanos aprovam devagar. Nos dois, CodeBuild, S3 e outros serviços usados são cobrados à parte.
 
-A vantagem é ficar tudo na AWS: só roles IAM, sem provedor OIDC, e o CodeBuild pode rodar dentro da VPC, alcançando um banco privado para testes de integração. O CDK tem um construct para isso, o CDK Pipelines, em que o pipeline se atualiza quando a definição dele muda. Para o Rangô, com pull requests e revisões no GitHub, seria um segundo lugar para olhar quando algo der errado.
+A vantagem é ficar tudo na AWS, para quem gosta de morar, trabalhar e fazer compras no mesmo condomínio: só roles IAM, sem provedor OIDC, e o CodeBuild pode rodar dentro da VPC, alcançando um banco privado para testes de integração. O CDK tem um construct para isso, o CDK Pipelines, em que o pipeline se atualiza quando a definição dele muda. Para o Rangô, com pull requests e revisões no GitHub, seria um segundo lugar para olhar quando algo der errado. Dois painéis de CI são como dois controles remotos para a mesma TV: um deles sempre está no lugar errado.
 
 ## Armadilhas e casos reais
 
 > **Armadilha:** Trust policy sem `sub`, ou com curinga. É o erro mais grave deste capítulo, porque não dá sinal nenhum: tudo funciona, e qualquer repositório do GitHub consegue assumir a role. Revise a trust policy de cada role federada com o mesmo cuidado de uma bucket policy pública. O IAM Access Analyzer aponta roles que podem ser assumidas de fora da conta.
 
-> **Armadilha:** Dois provedores para a mesma URL. Só existe um provedor OIDC por URL em cada conta. Se alguém já criou o do GitHub pelo console, seguindo um tutorial, o deploy da `RangoPipeline` falha com `EntityAlreadyExists`. Apague o provedor antigo, se nenhuma role depender dele, ou importe-o com `iam.OpenIdConnectProvider.from_open_id_connect_provider_arn`.
+> **Armadilha:** Dois provedores para a mesma URL. Só existe um provedor OIDC por URL em cada conta. Se alguém já criou o do GitHub pelo console, seguindo um tutorial (provavelmente de madrugada e sem anotar em lugar nenhum), o deploy da `RangoPipeline` falha com `EntityAlreadyExists`. Apague o provedor antigo, se nenhuma role depender dele, ou importe-o com `iam.OpenIdConnectProvider.from_open_id_connect_provider_arn`.
 
-> **Armadilha:** `cdk deploy` sem a versão. Sem o `-c versao_api`, a tag chega como `None` e o `from_ecr_repository` usa `latest`, que não existe num repositório de tags imutáveis enviado só com hashes. As tasks novas não conseguem baixar a imagem, o circuit breaker volta atrás e você perde 15 minutos para descobrir o motivo. Por isso os comandos manuais deste capítulo passam um valor qualquer; nenhum deles faz deploy da `RangoProducao`.
+> **Armadilha:** `cdk deploy` sem a versão. Sem o `-c versao_api`, a tag chega como `None` e o `from_ecr_repository` usa `latest`, que não existe num repositório de tags imutáveis enviado só com hashes. As tasks novas não conseguem baixar a imagem, o circuit breaker volta atrás e você perde 15 minutos para descobrir o motivo, e mais uns cinco para admitir o motivo para si mesmo. Por isso os comandos manuais deste capítulo passam um valor qualquer; nenhum deles faz deploy da `RangoProducao`.
 
-> **Armadilha:** Mexer nas regras do ALB no CDK depois do primeiro deploy. O ECS altera os pesos das regras a cada deploy, e depois de um número ímpar de deploys o tráfego está no verde. O CloudFormation não sabe disso. Se você mudar a definição de uma regra no código, o update reescreve os pesos com os valores do template, 100 para o azul, e o tráfego vai para um target group que pode estar vazio. Se precisar mudar uma regra, faça isso numa janela em que possa conferir o resultado com o `curl` logo em seguida.
+> **Armadilha:** Mexer nas regras do ALB no CDK depois do primeiro deploy. O ECS altera os pesos das regras a cada deploy, e depois de um número ímpar de deploys o tráfego está no verde. Paridade da contagem de deploys: mais um conceito que você não esperava ter de acompanhar. O CloudFormation não sabe disso. Se você mudar a definição de uma regra no código, o update reescreve os pesos com os valores do template, 100 para o azul, e o tráfego vai para um target group que pode estar vazio. Se precisar mudar uma regra, faça isso numa janela em que possa conferir o resultado com o `curl` logo em seguida.
 
 > **Armadilha:** O bake time ocupa o runner. O `cdk deploy` só termina depois dele, e em repositórios privados são minutos do plano. Com deploys muito frequentes, reduza o bake time ou use a estratégia linear, com degraus de 3% a 100% e espera de 0 a 1.440 minutos entre eles.
 
@@ -678,9 +678,9 @@ A vantagem é ficar tudo na AWS: só roles IAM, sem provedor OIDC, e o CodeBuild
 
 ## Três vezes por dia
 
-Com o pipeline no ar, o Bruno pega gosto por pedir coisas. A próxima: um resumo de vendas para cada restaurante, enviado às 11h, às 15h e às 23h, com os pedidos do período, o ticket médio e os pratos mais pedidos. A lógica é uma consulta ao Postgres e um e-mail, coisa de quarenta linhas de Python.
+Com o pipeline no ar, o Bruno pega gosto por pedir coisas. Cliente que descobre que o deploy ficou fácil é criança que descobriu onde fica o pote de biscoitos. A próxima: um resumo de vendas para cada restaurante, enviado às 11h, às 15h e às 23h, com os pedidos do período, o ticket médio e os pratos mais pedidos. A lógica é uma consulta ao Postgres e um e-mail, coisa de quarenta linhas de Python. Todo pedido de cliente vem com a frase "é rapidinho", e este, por incrível que pareça, é.
 
-Onde ela roda? O caminho mais curto com o que você tem é um terceiro worker no ECS, com um laço que dorme até a próxima hora cheia. Uma task de 0,25 vCPU ligada o mês inteiro para trabalhar uns poucos minutos por dia. O Rangô passaria a pagar 24 horas por dia por uma rotina que roda três vezes por dia, e o mesmo raciocínio vale para os próximos pedidos do Bruno: o relatório semanal, a limpeza de carrinhos abandonados, o webhook do gateway de pagamento que chega uma vez por pedido.
+Onde ela roda? O caminho mais curto com o que você tem é um terceiro worker no ECS, com um laço que dorme até a próxima hora cheia. Uma task de 0,25 vCPU ligada o mês inteiro para trabalhar uns poucos minutos por dia, como um funcionário contratado em tempo integral para apertar um botão três vezes ao dia. O Rangô passaria a pagar 24 horas por dia por uma rotina que roda três vezes por dia, e o mesmo raciocínio vale para os próximos pedidos do Bruno: o relatório semanal, a limpeza de carrinhos abandonados, o webhook do gateway de pagamento que chega uma vez por pedido.
 
 No próximo capítulo, o AWS Lambda roda código só quando algo acontece e cobra pelos milissegundos de execução. O capítulo mostra como ele executa uma função por dentro, o que é o cold start que o capítulo 4 apresentou, os limites que surpreendem, e quando o API Gateway na frente dele substitui um servidor inteiro. E também quando nada disso compensa.
 

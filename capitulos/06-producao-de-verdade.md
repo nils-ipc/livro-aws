@@ -1,38 +1,38 @@
 # Produção de verdade
 
-No capítulo anterior, a confirmação do pedido deixou de esperar o restaurante e o e-mail. A API grava o pedido, publica `pedido.criado` num stream do Redis e responde em 2,5 segundos, enquanto workers idempotentes fazem o resto, com retentativas, backoff e uma DLQ para as mensagens que não têm conserto. O sistema ficou mais rápido e mais tolerante a falhas de terceiros. Só que toda essa engenharia parte de uma premissa silenciosa: o banco de dados continua lá amanhã.
+No capítulo anterior, a confirmação do pedido deixou de esperar o restaurante e o e-mail. A API grava o pedido, publica `pedido.criado` num stream do Redis e responde em 2,5 segundos, enquanto workers idempotentes fazem o resto, com retentativas, backoff e uma DLQ para as mensagens que não têm conserto. O sistema ficou mais rápido e mais tolerante a falhas de terceiros. Só que toda essa engenharia parte de uma premissa silenciosa: o banco de dados continua lá amanhã. É a mesma premissa de quem deixa a marmita na geladeira do escritório na sexta e pretende almoçar na segunda.
 
 ## Sábado, 3h40
 
-Voltemos à madrugada em que o disco do Postgres falhou. Você está de pijama, com o terminal aberto, e encontrou o tal arquivo `.sql` de três semanas atrás. Decide restaurar. O primeiro `psql -f` para no meio com um erro de função inexistente, porque o dump foi gerado por uma versão do Postgres diferente da que roda hoje. Você ajusta, tenta de novo, e às 6h15 o banco está de pé.
+Voltemos à madrugada em que o disco do Postgres falhou. Você está de pijama, com o terminal aberto, e encontrou o tal arquivo `.sql` de três semanas atrás. Decide restaurar. O primeiro `psql -f` para no meio com um erro de função inexistente, porque o dump foi gerado por uma versão do Postgres diferente da que roda hoje. Mensagem de erro de madrugada tem um efeito curioso: você lê três vezes e entende menos a cada leitura. Você ajusta, tenta de novo, e às 6h15 o banco está de pé. O sol também.
 
 Com um buraco de três semanas.
 
-Todos os pedidos feitos depois daquele backup sumiram. O repasse para a Cantina da Nona e para o Sabor do Sertão vai ter que ser reconstruído a partir do extrato do gateway de pagamento, linha por linha. Às 7h, o primeiro cliente reclama no Instagram que o histórico de pedidos dele está vazio. Você descobre a queda pelo Instagram, porque nada no Rangô avisou ninguém.
+Todos os pedidos feitos depois daquele backup sumiram. O repasse para a Cantina da Nona e para o Sabor do Sertão vai ter que ser reconstruído a partir do extrato do gateway de pagamento, linha por linha. Às 7h, o primeiro cliente reclama no Instagram que o histórico de pedidos dele está vazio. Você descobre a queda pelo Instagram, porque nada no Rangô avisou ninguém. O Rangô tinha, sim, um sistema de monitoramento: chamava-se cliente irritado.
 
-Na segunda-feira, a sócia pergunta o que precisa mudar. A lista é longa: backups automáticos e testados, uma cópia do banco pronta para assumir, um jeito de recriar o servidor sem depender da memória de ninguém, deploys que não sejam um ato de fé e alguma forma de enxergar o sistema. Este capítulo percorre essa lista, e cada item vira um serviço concreto na Parte II.
+Na segunda-feira, a sócia pergunta o que precisa mudar. A lista é longa: backups automáticos e testados, uma cópia do banco pronta para assumir, um jeito de recriar o servidor sem depender da memória de ninguém, deploys que não sejam um ato de fé e alguma forma de enxergar o sistema. A sócia ouve tudo com a calma de quem já começou a pesquisar quanto custa um curso de DevOps para o sócio. Este capítulo percorre essa lista, e cada item vira um serviço concreto na Parte II.
 
 ## Backup só conta depois do primeiro restore
 
-O script do desenvolvedor que saiu em março tinha três defeitos, e eles são os mais comuns do mundo. Rodava numa máquina que não era servidor, gravava a cópia num lugar só e nunca foi testado. Qualquer um dos três basta para você perder dados.
+O script do desenvolvedor que saiu em março tinha três defeitos, e eles são os mais comuns do mundo. Rodava numa máquina que não era servidor, gravava a cópia num lugar só e nunca foi testado. Qualquer um dos três basta para você perder dados. O script conseguiu reunir os três, o que exige certo talento.
 
-Comece pelos tipos de backup de um banco relacional, porque eles se comportam de forma bem diferente.
+O começo são os tipos de backup de um banco relacional, porque eles se comportam de forma bem diferente.
 
 O **backup lógico** é um retrato do conteúdo num arquivo que o próprio banco sabe reler. No Postgres, é o `pg_dump`. Ele é portável e permite restaurar só uma tabela, mas captura um instante: tudo o que aconteceu depois está perdido. Num banco grande, gerar e restaurar o dump demora horas.
 
-O **backup físico** copia os arquivos de dados como estão no disco. O que muda o jogo é combiná-lo com o **WAL** (*write-ahead log*): antes de alterar qualquer dado, o Postgres escreve num log sequencial o que vai fazer. Com uma cópia física de domingo e todos os arquivos de WAL desde então, dá para reproduzir o histórico até qualquer segundo. Isso se chama **point-in-time recovery** (PITR), e é como ter o `git log` inteiro do banco: você faz *checkout* em "sábado, 3h11", um minuto antes do disco falhar. Ou um minuto antes de alguém rodar um `DELETE` sem `WHERE`, o desastre mais frequente na prática.
+O **backup físico** copia os arquivos de dados como estão no disco. O que muda o jogo é combiná-lo com o **WAL** (*write-ahead log*): antes de alterar qualquer dado, o Postgres escreve num log sequencial o que vai fazer. Com uma cópia física de domingo e todos os arquivos de WAL desde então, dá para reproduzir o histórico até qualquer segundo. Isso se chama **point-in-time recovery** (PITR), e é como ter o `git log` inteiro do banco: você faz *checkout* em "sábado, 3h11", um minuto antes do disco falhar. Ou um minuto antes de alguém rodar um `DELETE` sem `WHERE`, o desastre mais frequente na prática. Todo DBA com mais de dez anos de carreira tem uma história dessas, e quase todas começam com "foi só um ajuste rápido".
 
-Depois vem o lugar onde a cópia mora. A regra clássica é a **3-2-1**: três cópias, em dois tipos de mídia, uma delas fora do local. Na nuvem, "fora do local" vira outra região ou outra conta, para que o mesmo erro (ou o mesmo invasor) não apague banco e backup de uma vez.
+Depois vem o lugar onde a cópia mora. A regra clássica é a **3-2-1**: três cópias, em dois tipos de mídia, uma delas fora do local. Na nuvem, "fora do local" vira outra região ou outra conta, para que o mesmo erro (ou o mesmo invasor) não apague banco e backup de uma vez. Guardar o backup no mesmo disco do banco é como guardar a chave reserva de casa dentro de casa.
 
-Por último, o teste. Restaurar precisa ser um procedimento automático e frequente, que confere o resultado: a tabela existe, a contagem bate, o pedido mais recente tem a data esperada. Descobrir que o backup está quebrado numa terça à tarde é bem melhor que num sábado às 3h40.
+Por último, o teste. Restaurar precisa ser um procedimento automático e frequente, que confere o resultado: a tabela existe, a contagem bate, o pedido mais recente tem a data esperada. Descobrir que o backup está quebrado numa terça à tarde é bem melhor que num sábado às 3h40. Um backup nunca restaurado é um bilhete de loteria não conferido: pode valer tudo ou nada, e você só descobre no dia em que precisa.
 
 ## RPO e RTO: quanto perder e quanto esperar
 
 Duas perguntas da ponte do capítulo anterior têm nome técnico.
 
-**RPO** (*Recovery Point Objective*) é a quantidade máxima de dados que você aceita perder, medida em tempo. Se o RPO é de cinco minutos, depois de um desastre você pode voltar a um estado de no máximo cinco minutos atrás. O RPO do Rangô naquela madrugada era, sem que ninguém tivesse escolhido, de três semanas.
+**RPO** (*Recovery Point Objective*) é a quantidade máxima de dados que você aceita perder, medida em tempo. Se o RPO é de cinco minutos, depois de um desastre você pode voltar a um estado de no máximo cinco minutos atrás. O RPO do Rangô naquela madrugada era, sem que ninguém tivesse escolhido, de três semanas. Foi a decisão de negócio mais importante do ano, e ninguém estava na reunião.
 
-**RTO** (*Recovery Time Objective*) é quanto tempo o sistema pode ficar fora do ar até voltar a funcionar. Naquela noite, foram cerca de três horas entre a falha e o banco de pé, sem contar o trabalho de reconstruir os repasses.
+**RTO** (*Recovery Time Objective*) é quanto tempo o sistema pode ficar fora do ar até voltar a funcionar. Naquela noite, foram cerca de três horas entre a falha e o banco de pé, sem contar o trabalho de reconstruir os repasses, que exigiu uma planilha, o extrato do gateway e uma quantidade de café que não convém registrar.
 
 Os dois números são decisões de negócio, e cada minuto a menos custa dinheiro. Um RPO de 24 horas sai com um `pg_dump` noturno; um de cinco minutos exige arquivamento contínuo de WAL; um próximo de zero exige uma réplica que confirma cada escrita. Com o RTO, o mesmo: restaurar um dump de 200 GB leva horas, promover uma réplica já ligada leva segundos.
 
@@ -46,19 +46,19 @@ Na **replicação**, um servidor é a **primária**: recebe todas as escritas. O
 
 A replicação pode ser **síncrona** ou **assíncrona**, e isso mexe direto no RPO. Na síncrona, a primária só confirma o `COMMIT` depois que a réplica recebeu a mudança: nada confirmado se perde, mas cada escrita fica mais lenta e, se a réplica travar, as escritas travam junto. Na assíncrona, a primária confirma na hora e envia logo depois, então as últimas transações podem não ter chegado à réplica no momento da falha. Esse atraso é o *replication lag*, normalmente de milissegundos, que pode virar minutos sob carga.
 
-Uma réplica tem duas utilidades. A primeira é servir leituras, como o histórico de pedidos e os relatórios dos restaurantes, aliviando a primária. A pegadinha é o lag: o cliente confirma um pedido, a página seguinte lê da réplica, e o pedido ainda não está lá. É a consistência eventual do capítulo 5 dentro do banco. Leia da primária o que o usuário acabou de escrever.
+Uma réplica tem duas utilidades. A primeira é servir leituras, como o histórico de pedidos e os relatórios dos restaurantes, aliviando a primária. A pegadinha é o lag: o cliente confirma um pedido, a página seguinte lê da réplica, e o pedido ainda não está lá. O cliente, desconfiado, aperta "Confirmar" de novo, e ainda bem que o capítulo 5 cuidou disso. É a consistência eventual do capítulo 5 dentro do banco. Leia da primária o que o usuário acabou de escrever.
 
-A segunda é o **failover**: quando a primária morre, uma réplica é promovida e a aplicação passa a escrever nela. Automatizado, isso leva segundos, mas traz um risco novo, o **split brain**. Se a primária só perdeu a rede por 30 segundos e o sistema promoveu a réplica, você pode ter dois servidores aceitando escritas, cada um com uma versão dos pedidos. Bons sistemas de failover isolam a primária antiga antes de a nova assumir.
+A segunda é o **failover**: quando a primária morre, uma réplica é promovida e a aplicação passa a escrever nela. Automatizado, isso leva segundos, mas traz um risco novo, o **split brain**. Se a primária só perdeu a rede por 30 segundos e o sistema promoveu a réplica, você pode ter dois servidores aceitando escritas, cada um com uma versão dos pedidos. É o equivalente, em banco de dados, a dois gerentes dando ordens contrárias para a mesma equipe, cada um convencido de que é o chefe. Bons sistemas de failover isolam a primária antiga antes de a nova assumir.
 
-> **Armadilha:** réplica protege contra falha de hardware, mas copia os erros com a mesma fidelidade. Um `DROP TABLE pedidos` na primária chega à réplica em milissegundos. Por isso réplica e backup resolvem problemas diferentes, e você precisa dos dois.
+> **Armadilha:** réplica protege contra falha de hardware, mas copia os erros com a mesma fidelidade, como o colega que cola a sua prova inteira, inclusive a resposta errada. Um `DROP TABLE pedidos` na primária chega à réplica em milissegundos. Por isso réplica e backup resolvem problemas diferentes, e você precisa dos dois.
 
-No capítulo 12, o Amazon RDS vai fazer quase tudo isso por você: backups automáticos com PITR, uma réplica síncrona em outra zona para failover e réplicas de leitura assíncronas. Saber o que acontece por baixo é o que permite escolher a configuração certa.
+No capítulo 12, o Amazon RDS vai fazer quase tudo isso por você (e cobrar por isso, como todo bom prestador de serviço): backups automáticos com PITR, uma réplica síncrona em outra zona para failover e réplicas de leitura assíncronas. Saber o que acontece por baixo é o que permite escolher a configuração certa.
 
 ## Alta disponibilidade e recuperação de desastres
 
-Os dois termos andam juntos e confundem.
+Os dois termos andam juntos e confundem. Aparecem tanto no mesmo slide que muita gente acha que são a mesma coisa com duas siglas.
 
-**Alta disponibilidade** (HA, de *high availability*) é continuar funcionando quando um componente falha, de preferência sem ninguém perceber. Várias instâncias da API atrás de um balanceador, como no capítulo 4, e uma réplica pronta para failover lidam com falhas pequenas e frequentes: um processo que morre, um disco que falha.
+**Alta disponibilidade** (HA, de *high availability*) é continuar funcionando quando um componente falha, de preferência sem ninguém perceber. É o tipo de trabalho que, quando bem feito, ninguém agradece, porque ninguém fica sabendo. Várias instâncias da API atrás de um balanceador, como no capítulo 4, e uma réplica pronta para failover lidam com falhas pequenas e frequentes: um processo que morre, um disco que falha.
 
 **Recuperação de desastres** (DR, de *disaster recovery*) é o plano para algo grande: um data center inteiro fora do ar, um ataque de *ransomware*, um erro humano que apaga produção. DR mede-se em RPO e RTO e envolve backups em outro local, procedimentos escritos e ensaios.
 
@@ -71,25 +71,25 @@ Disponibilidade costuma ser expressa em "noves". Usando um mês de 730 horas, a 
 | 99,99% | cerca de 4,4 minutos |
 | 99,999% | cerca de 26 segundos |
 
-Cada nove a mais custa bem mais que o anterior. E existe uma conta que surpreende: disponibilidades de componentes em série se multiplicam. Se a API tem 99,9% e o banco também, o Rangô como um todo tem no máximo 99,8%, porque precisa dos dois ao mesmo tempo. Some o Redis, o gateway de pagamento e o DNS, e o número cai mais um pouco. Redundância melhora essa conta; cada dependência nova piora.
+Cada nove a mais custa bem mais que o anterior. Quem promete cinco noves na reunião de vendas raramente é quem fica de plantão para cumpri-los. E existe uma conta que surpreende: disponibilidades de componentes em série se multiplicam. Se a API tem 99,9% e o banco também, o Rangô como um todo tem no máximo 99,8%, porque precisa dos dois ao mesmo tempo. Some o Redis, o gateway de pagamento e o DNS, e o número cai mais um pouco. Redundância melhora essa conta; cada dependência nova piora. Toda vez que alguém disser "é só mais uma dependência", essa conta merecia aparecer projetada na parede.
 
-As estratégias de DR formam uma escada de custo. Na base, **backup e restauração**: você recria tudo a partir dos backups, com RTO de horas. Acima, o *pilot light* (banco replicado em outro local, servidores desligados e prontos) e o *warm standby* (uma cópia reduzida rodando o tempo todo). No topo, dois ambientes ativos ao mesmo tempo, com RTO próximo de zero e uma conta proporcional. Para o Rangô de hoje, backup e restauração bem feito já seria uma enorme melhora, desde que recriar o servidor não dependa de lembrar 40 comandos digitados há um ano.
+As estratégias de DR formam uma escada de custo. Na base, **backup e restauração**: você recria tudo a partir dos backups, com RTO de horas. Acima, o *pilot light* (banco replicado em outro local, servidores desligados e prontos) e o *warm standby* (uma cópia reduzida rodando o tempo todo). No topo, dois ambientes ativos ao mesmo tempo, com RTO próximo de zero e uma conta proporcional. Para o Rangô de hoje, backup e restauração bem feito já seria uma enorme melhora, desde que recriar o servidor não dependa de lembrar 40 comandos digitados há um ano e guardados com carinho no `~/.bash_history` de um servidor que acabou de morrer.
 
 ## Segredos fora do código
 
-Antes de colocar as mãos no banco, um detalhe que atrapalha quase todo projeto: onde fica a senha dele.
+Antes de colocar as mãos no banco, um detalhe que atrapalha quase todo projeto: onde fica a senha dele. Em muitos projetos, a resposta honesta é "num post-it, num `.env` e na memória do Carlos".
 
-No Rangô, até agora, configuração entrou por variáveis de ambiente, e isso continua certo. O problema é de onde essas variáveis vêm. Um `.env` commitado por engano fica no histórico do git mesmo depois de apagado, e qualquer clone antigo do repositório carrega a senha. Uma senha colada no Slack fica no histórico do Slack. Uma senha escrita no `compose.yaml` vai para o repositório junto com ele.
+No Rangô, até agora, configuração entrou por variáveis de ambiente, e isso continua certo. O problema é de onde essas variáveis vêm. Um `.env` commitado por engano fica no histórico do git mesmo depois de apagado, e qualquer clone antigo do repositório carrega a senha. O git, por projeto, não esquece nada; é o parente que lembra de tudo o que você disse no Natal de 2009. Uma senha colada no Slack fica no histórico do Slack. E, se a senha for `rango123`, ela fica também ao alcance de qualquer pessoa com dois minutos de paciência para adivinhar. Uma senha escrita no `compose.yaml` vai para o repositório junto com ele.
 
-A **gestão de segredos** se apoia em poucas regras. O segredo mora num lugar próprio, com controle de quem lê, e a aplicação o recebe em tempo de execução, nunca no código nem na imagem Docker. Cada ambiente tem os próprios segredos. E a **rotação** precisa ser possível sem deploy, porque um dia você vai trocar uma senha às pressas.
+A **gestão de segredos** se apoia em poucas regras. O segredo mora num lugar próprio, com controle de quem lê, e a aplicação o recebe em tempo de execução, nunca no código nem na imagem Docker. Cada ambiente tem os próprios segredos. E a **rotação** precisa ser possível sem deploy, porque um dia você vai trocar uma senha às pressas. Normalmente numa sexta-feira, minutos depois de alguém dizer "acho que commitei uma coisa".
 
-Na AWS, esse lugar próprio será o AWS Systems Manager Parameter Store ou o AWS Secrets Manager, assunto do capítulo 16. Localmente, o Docker Compose tem um mecanismo de *secrets* que monta o conteúdo de um arquivo dentro do container, em `/run/secrets/`, sem passar por variável de ambiente. Vamos usá-lo agora.
+Na AWS, esse lugar próprio será o AWS Systems Manager Parameter Store ou o AWS Secrets Manager, assunto do capítulo 16. Localmente, o Docker Compose tem um mecanismo de *secrets* que monta o conteúdo de um arquivo dentro do container, em `/run/secrets/`, sem passar por variável de ambiente. É ele que aparece na prática logo a seguir.
 
-## Mão na massa: backup, desastre e restore testado
+## Na prática: backup, desastre e restore testado
 
-O Rangô ainda guarda os pedidos no Redis, e a mudança definitiva para o Postgres acontece no capítulo 12, com o RDS. Para treinar backup e restauração, vamos subir um Postgres no Compose com uma tabela de pedidos preenchida com dados de teste.
+O Rangô ainda guarda os pedidos no Redis, e a mudança definitiva para o Postgres acontece no capítulo 12, com o RDS. Para treinar backup e restauração, o exemplo sobe um Postgres no Compose com uma tabela de pedidos preenchida com dados de teste. A vantagem dos dados de teste é que nenhum restaurante liga reclamando quando eles somem.
 
-Pré-requisitos: Docker com Compose v2, `openssl` e o projeto do capítulo 5. Os comandos rodam na raiz do projeto, num terminal bash (no Windows, use o WSL ou o Git Bash).
+Pré-requisitos: Docker com Compose v2, `openssl` e o projeto do capítulo 5. Os comandos rodam na raiz do projeto, num terminal bash (no Windows, o equivalente é o WSL ou o Git Bash).
 
 Primeiro, a senha, gerada aleatoriamente e mantida fora do git:
 
@@ -99,7 +99,7 @@ openssl rand -base64 24 | tr -d '\n' > secrets/db_password.txt
 printf 'secrets/\nbackups/\n' >> .gitignore
 ```
 
-Agora acrescente ao `compose.yaml` o serviço `db`, o volume e o segredo. As chaves `volumes` e `secrets` de nível superior ficam fora de `services`:
+Agora o `compose.yaml` ganha o serviço `db`, o volume e o segredo. As chaves `volumes` e `secrets` de nível superior ficam fora de `services`:
 
 ```yaml
 # compose.yaml (trechos novos)
@@ -126,7 +126,7 @@ secrets:
 
 A imagem oficial do Postgres aceita a variante `_FILE` de várias variáveis e lê a senha do arquivo montado. Assim, `docker inspect` não mostra a senha nas variáveis do container. Não há `ports`: o banco só é alcançável pela rede interna do Compose, a mesma lição do capítulo 1 sobre bancos expostos.
 
-Suba o banco e crie 5 mil pedidos de teste. O `psql` roda dentro do container, por socket local, então não pede senha:
+Com o banco no ar, entram 5 mil pedidos de teste. O `psql` roda dentro do container, por socket local, então não pede senha:
 
 ```bash
 docker compose up -d db
@@ -191,7 +191,7 @@ fi
 echo "OK: restore testado com sucesso"
 ```
 
-Rode os dois:
+Os dois em ação:
 
 ```bash
 chmod +x scripts/*.sh
@@ -205,7 +205,7 @@ pedidos no backup restaurado: 5000
 OK: restore testado com sucesso
 ```
 
-Agora vamos sentir o RPO. Depois do backup, chegam mais 37 pedidos. Em seguida, acontece o desastre:
+Agora dá para sentir o RPO na pele. Depois do backup, chegam mais 37 pedidos. Em seguida, acontece o desastre, provocado de propósito, o que já é mais controle do que a maioria dos desastres oferece:
 
 ```bash
 docker compose exec -T db psql -U rango -d rango -c \
@@ -213,7 +213,7 @@ docker compose exec -T db psql -U rango -d rango -c \
 docker compose exec -T db psql -U rango -d rango -c "DROP TABLE pedidos"
 ```
 
-Restaure o backup no banco principal e conte:
+O backup volta para o banco principal, seguido de uma contagem:
 
 ```bash
 docker compose exec -T db pg_restore -U rango -d rango --no-owner < backups/rango-*.dump
@@ -224,41 +224,41 @@ docker compose exec -T db psql -U rango -d rango -tAc "SELECT count(*) FROM pedi
 5000
 ```
 
-Os 37 pedidos feitos depois do backup se foram. Com um `pg_dump` por hora, seu RPO é de até uma hora. Encurtar isso para minutos é o papel do arquivamento contínuo de WAL, que o RDS oferece pronto no capítulo 12.
+Os 37 pedidos feitos depois do backup se foram. Trinta e sete, de novo; esse número parece perseguir o Rangô. Com um `pg_dump` por hora, seu RPO é de até uma hora. Encurtar isso para minutos é o papel do arquivamento contínuo de WAL, que o RDS oferece pronto no capítulo 12.
 
 Falta o backup rodar sozinho, ir para outro lugar e ter o restore testado periodicamente, com alerta se falhar. Na Parte II, o destino será o Amazon S3; localmente, um `cron` no servidor bastaria, desde que o servidor não seja o notebook de ninguém.
 
 > **Dica:** um teste de restore bom mede também o tempo. Se restaurar levou 40 minutos no teste, seu RTO real nunca vai ser menor que 40 minutos, por mais que o documento de arquitetura diga outra coisa.
 
-Quando terminar, `docker compose down` para os containers. O volume `dados-db` continua existindo; para apagá-lo também, use `docker compose down -v`.
+No fim, `docker compose down` para os containers. O volume `dados-db` continua existindo; para apagá-lo também, o comando é `docker compose down -v`.
 
 ## Infraestrutura como código
 
-Voltemos ao RTO. Para recriar o servidor do Rangô do zero, alguém precisaria instalar o Docker, criar o usuário `rango`, configurar o Nginx, instalar os certificados, ajustar o firewall e lembrar de um parâmetro do kernel que foi mudado num dia de pânico. Se isso está na cabeça de uma pessoa, o RTO depende das férias dela.
+Voltemos ao RTO. Para recriar o servidor do Rangô do zero, alguém precisaria instalar o Docker, criar o usuário `rango`, configurar o Nginx, instalar os certificados, ajustar o firewall e lembrar de um parâmetro do kernel que foi mudado num dia de pânico. Se isso está na cabeça de uma pessoa, o RTO depende das férias dela, e do sinal de celular na praia.
 
 **Infraestrutura como código** (IaC) significa descrever servidores, redes, bancos, balanceadores e permissões em arquivos de texto versionados no git, e deixar uma ferramenta criar e atualizar tudo a partir deles. A melhor analogia para quem vem de Django ou Alembic é a *migration*: em vez de alterar o banco à mão no console, você escreve a mudança num arquivo, revisa num pull request e aplica de forma repetível. IaC faz isso com a infraestrutura inteira.
 
 Você já usa uma forma disso. O `compose.yaml` do Rangô descreve containers, redes, volumes e segredos de forma declarativa: você diz o estado desejado e o Compose descobre o que precisa criar, recriar ou manter. A diferença para a produção é a escala do que se descreve.
 
-As ferramentas se dividem em duas famílias. As **declarativas** descrevem o estado final ("quero dois servidores e um banco com estas configurações"), e a ferramenta calcula a diferença entre o que existe e o que foi pedido, a mesma ideia de reconciliação que você viu no Kubernetes. Terraform, AWS CloudFormation e AWS CDK estão nessa família. As **imperativas** descrevem passos ("instale isto, depois copie aquilo"), como scripts de shell; elas funcionam bem na primeira execução e mal na segunda.
+As ferramentas se dividem em duas famílias. As **declarativas** descrevem o estado final ("quero dois servidores e um banco com estas configurações"), e a ferramenta calcula a diferença entre o que existe e o que foi pedido, a mesma ideia de reconciliação que você viu no Kubernetes. Terraform, AWS CloudFormation e AWS CDK estão nessa família. As **imperativas** descrevem passos ("instale isto, depois copie aquilo"), como scripts de shell; elas funcionam bem na primeira execução e mal na segunda, como piada repetida.
 
 Recriar o ambiente depois de um desastre vira um comando, e criar uma homologação idêntica à produção também. Toda mudança passa por revisão, então "quem abriu a porta 5432 para a internet?" tem resposta no `git blame`.
 
-O inimigo da IaC é o **drift**: alguém muda algo direto no console, "só dessa vez", e o código deixa de descrever a realidade. A regra que funciona é tratar o console como somente leitura em produção.
+O inimigo da IaC é o **drift**: alguém muda algo direto no console, "só dessa vez" (frase dita umas quarenta vezes por ano), e o código deixa de descrever a realidade. A regra que funciona é tratar o console como somente leitura em produção.
 
-No capítulo 15, o Rangô inteiro será descrito com o AWS CDK em Python, e a partir dali todo exemplo do livro usa código em vez de cliques.
+No capítulo 15, o Rangô inteiro será descrito com o AWS CDK em Python, e a partir dali todo exemplo do livro usa código em vez de cliques. O mouse, finalmente, pode tirar as férias que nunca teve.
 
 ## CI/CD: a esteira entre o commit e a produção
 
-O deploy do Rangô ainda é uma pessoa rodando comandos. Em geral na sexta, às 18h, porque é quando a funcionalidade ficou pronta.
+O deploy do Rangô ainda é uma pessoa rodando comandos. Em geral na sexta, às 18h, porque é quando a funcionalidade ficou pronta. Existe um ditado antigo entre quem opera sistemas: quem faz deploy na sexta trabalha no sábado.
 
-**Integração contínua** (CI, de *continuous integration*) é a prática de, a cada push ou pull request, um servidor rodar automaticamente os testes, o *linter* e o build, para descobrir em minutos que uma mudança quebrou algo. **Entrega contínua** e **deploy contínuo** (ambos chamados de CD) estendem a esteira: na entrega, toda versão aprovada está pronta para produção e alguém aperta o botão; no deploy contínuo, ela vai sozinha.
+**Integração contínua** (CI, de *continuous integration*) é a prática de, a cada push ou pull request, um servidor rodar automaticamente os testes, o *linter* e o build, para descobrir em minutos que uma mudança quebrou algo, em vez de descobrir pelo Instagram, um canal de monitoramento que já provou sair caro. **Entrega contínua** e **deploy contínuo** (ambos chamados de CD) estendem a esteira: na entrega, toda versão aprovada está pronta para produção e alguém aperta o botão; no deploy contínuo, ela vai sozinha.
 
-O conjunto se chama *pipeline*, uma sequência de etapas em que cada uma só começa se a anterior passou: testes, build da imagem com tag única (o hash do commit, nunca `latest`), envio ao registry, homologação e produção. O ganho mais subestimado é a previsibilidade. Um deploy que roda igual todas as vezes deixa de depender de quem está de plantão, e dez deploys pequenos por dia ficam mais seguros que um gigante por mês, porque uma mudança pequena é fácil de achar e de reverter.
+O conjunto se chama *pipeline*, uma sequência de etapas em que cada uma só começa se a anterior passou: testes, build da imagem com tag única (o hash do commit, nunca `latest`), envio ao registry, homologação e produção. O ganho mais subestimado é a previsibilidade. Um deploy que roda igual todas as vezes deixa de depender de quem está de plantão, e dez deploys pequenos por dia ficam mais seguros que um gigante por mês, porque uma mudança pequena é fácil de achar e de reverter. Deploy gigante é como mudança de apartamento: sempre some uma caixa, e ninguém sabe dizer qual.
 
-### Mão na massa: o primeiro pipeline do Rangô
+### Na prática: o primeiro pipeline do Rangô
 
-Vamos usar o GitHub Actions, que roda de graça para repositórios públicos e tem uma cota mensal de minutos para privados. Primeiro, um teste. Crie `backend/requirements-dev.txt`:
+O exemplo usa o GitHub Actions, que roda de graça para repositórios públicos e tem uma cota mensal de minutos para privados. Primeiro, um teste, que precisa do arquivo `backend/requirements-dev.txt`:
 
 ```text
 pytest
@@ -288,7 +288,7 @@ def test_restaurantes_tem_taxa_formatada():
     assert all("taxa_entrega_fmt" in r for r in resposta.json())
 ```
 
-O segundo teste precisa do Redis, porque `/restaurantes` usa cache. O pipeline vai subir um Redis como *service container*. Crie `.github/workflows/ci.yaml` na raiz do repositório:
+O segundo teste precisa do Redis, porque `/restaurantes` usa cache. O pipeline vai subir um Redis como *service container*. Ele fica em `.github/workflows/ci.yaml`, na raiz do repositório:
 
 ```yaml
 # .github/workflows/ci.yaml
@@ -331,7 +331,7 @@ jobs:
       - run: docker build -t rango-api:${{ github.sha }} backend
 ```
 
-O bloco `permissions` limita o token do pipeline a ler o código, menor privilégio desde o primeiro arquivo. O job `imagem` só roda se `testes` passar, por causa do `needs`, e a tag é o hash do commit, rastreável até a linha que gerou o build. O `python -m pytest` coloca o diretório atual no caminho de importação, para que `from app.main import app` funcione. Se alguém quebrar o `/health`, o pull request fica vermelho antes de qualquer revisão humana.
+O bloco `permissions` limita o token do pipeline a ler o código, menor privilégio desde o primeiro arquivo. O job `imagem` só roda se `testes` passar, por causa do `needs`, e a tag é o hash do commit, rastreável até a linha que gerou o build. O `python -m pytest` coloca o diretório atual no caminho de importação, para que `from app.main import app` funcione. Se alguém quebrar o `/health`, o pull request fica vermelho antes de qualquer revisão humana. O robô não tem pena, não tem sono e não aceita "depois eu arrumo".
 
 O pipeline ainda para no build, porque falta o lugar para onde mandar a imagem. No capítulo 18, ele ganha o envio ao Amazon ECR e o deploy no Amazon ECS, autenticando na AWS por OIDC, sem chave de longa duração guardada no GitHub.
 
@@ -341,23 +341,23 @@ Com o pipeline pronto, a pergunta muda: como colocar a versão nova no ar sem de
 
 No **rolling update**, as instâncias são trocadas aos poucos: uma sai, a versão nova entra, passa no health check, e só então a próxima é trocada. É o que o Deployment do Kubernetes fazia no capítulo 3. Não exige capacidade extra, mas por alguns minutos as duas versões atendem juntas, e voltar atrás é outro rolling update no sentido inverso.
 
-No **blue/green**, você mantém dois ambientes completos. O azul atende produção; o verde recebe a versão nova e é testado sem tráfego real. Depois, o balanceador passa a apontar para o verde de uma vez, e o rollback é apontar de volta, em segundos. O custo é o dobro da capacidade durante a troca.
+No **blue/green**, você mantém dois ambientes completos. O azul atende produção; o verde recebe a versão nova e é testado sem tráfego real. Depois, o balanceador passa a apontar para o verde de uma vez, e o rollback é apontar de volta, em segundos. O custo é o dobro da capacidade durante a troca. É como ter dois carros na garagem só para nunca ficar a pé: funciona, mas o seguro dói.
 
-No **canary**, a versão nova recebe uma fração pequena do tráfego real, digamos 5%, enquanto você observa erros e latência. Se os números ficarem bons, a fração sobe até 100%; se piorarem, só 5% dos usuários sentiram por alguns minutos. O nome vem dos canários que mineiros levavam às minas de carvão. Essa estratégia depende de métricas confiáveis para decidir.
+No **canary**, a versão nova recebe uma fração pequena do tráfego real, digamos 5%, enquanto você observa erros e latência. Se os números ficarem bons, a fração sobe até 100%; se piorarem, só 5% dos usuários sentiram por alguns minutos. O nome vem dos canários que mineiros levavam às minas de carvão. O pássaro sentia o gás antes das pessoas, e o mal-estar dele era o alarme. Na versão de software, o pior que acontece com o canário é um rollback. Essa estratégia depende de métricas confiáveis para decidir.
 
-Complementam essas estratégias os *feature flags*: o código vai para produção desligado e uma configuração liga a funcionalidade para alguns usuários, separando o deploy do lançamento.
+Complementam essas estratégias os *feature flags*: o código vai para produção desligado e uma configuração liga a funcionalidade para alguns usuários, separando o deploy do lançamento. É também a técnica mais elegante já inventada para esconder do chefe uma funcionalidade pela metade.
 
 > **Armadilha:** a estratégia de deploy cuida da aplicação; o banco continua sendo um só. Se a versão nova renomeia a coluna `total` para `valor_total`, a versão antiga, que ainda atende durante o rolling ou o canary, começa a falhar. A saída é o padrão *expand/contract*: primeiro uma migration que adiciona a coluna nova e mantém a antiga, depois o código que usa a nova, e só num deploy posterior a migration que remove a antiga. Toda migration precisa ser compatível com a versão anterior do código.
 
-### Mão na massa: um canário com o Nginx
+### Na prática: um canário com o Nginx
 
-O Nginx do Rangô já balanceia entre as instâncias da API. Com pesos no `upstream`, ele faz um canário simples. Gere a imagem nova, que vai incluir os logs estruturados da próxima seção:
+O Nginx do Rangô já balanceia entre as instâncias da API. Com pesos no `upstream`, ele faz um canário simples. O primeiro passo é gerar a imagem nova, que vai incluir os logs estruturados da próxima seção:
 
 ```bash
 docker build -t rango-api:0.5.0 backend
 ```
 
-No `compose.yaml`, acrescente um serviço `api-canario` igual ao `api`, mas com a imagem nova e um nome de host fixo. Lembre que o middleware do capítulo 4 usa o nome do host no cabeçalho `X-Rango-Instancia`:
+No `compose.yaml`, entra um serviço `api-canario` igual ao `api`, mas com a imagem nova e um nome de host fixo. Lembrando: o middleware do capítulo 4 usa o nome do host no cabeçalho `X-Rango-Instancia`:
 
 ```yaml
 # compose.yaml (trecho novo)
@@ -372,7 +372,7 @@ No `compose.yaml`, acrescente um serviço `api-canario` igual ao `api`, mas com 
     restart: unless-stopped
 ```
 
-Em `nginx/rango.conf`, adicione o canário ao `upstream` e dê peso às instâncias estáveis:
+Em `nginx/rango.conf`, o canário entra no `upstream`, e as instâncias estáveis ganham peso:
 
 ```nginx
 upstream rango_api {
@@ -381,7 +381,7 @@ upstream rango_api {
 }
 ```
 
-Atenção à conta. O nome `api` resolve para três IPs, porque a API roda com `--scale api=3`, e cada IP herda o peso 3. São 9 partes para a versão estável e 1 para o canário, ou seja, 10% do tráfego. Suba tudo e faça 100 requisições:
+Atenção à conta. O nome `api` resolve para três IPs, porque a API roda com `--scale api=3`, e cada IP herda o peso 3. São 9 partes para a versão estável e 1 para o canário, ou seja, 10% do tráfego. Com tudo no ar, 100 requisições mostram a divisão:
 
 ```bash
 docker compose up -d --scale api=3
@@ -398,7 +398,7 @@ done | cut -d' ' -f2 | tr -d '\r' | sort | uniq -c
      10 canario
 ```
 
-Os IDs vão ser outros na sua máquina. Para promover o canário, troque a imagem do serviço `api` para `rango-api:0.5.0` e remova o `api-canario`. Para o rollback, tire a linha do canário do `upstream` e reinicie o proxy.
+Dez no canário, exatamente como a conta previu. A estatística raramente colabora tanto. Os IDs mudam de uma máquina para outra. Promover o canário é trocar a imagem do serviço `api` para `rango-api:0.5.0` e remover o `api-canario`. O rollback é tirar a linha do canário do `upstream` e reiniciar o proxy.
 
 ## Observabilidade: saber antes do cliente
 
@@ -406,17 +406,17 @@ Na madrugada do disco, o Rangô ficou fora do ar e a primeira notícia veio do I
 
 Ela se apoia em três tipos de sinal.
 
-Os **logs** são registros de eventos individuais: "`POST /pedidos` retornou 500 em 2.380 ms". Com seis instâncias da API e dois workers, um `print` solto em cada container fica inútil. Os logs precisam ser **estruturados** (JSON com campos fixos), centralizados e pesquisáveis.
+Os **logs** são registros de eventos individuais: "`POST /pedidos` retornou 500 em 2.380 ms". Com seis instâncias da API e dois workers, um `print` solto em cada container fica inútil. Procurar um erro assim é como procurar uma meia específica numa lavanderia industrial. Os logs precisam ser **estruturados** (JSON com campos fixos), centralizados e pesquisáveis.
 
-As **métricas** são números agregados no tempo: requisições por segundo, percentual de erros, latência, tamanho da fila. São baratas e ótimas para alertas, mas não contam a história de uma requisição. O livro *Site Reliability Engineering*, do Google, sugere começar por quatro sinais de ouro: latência, tráfego, erros e saturação. Para latência, use percentis: uma média de 300 ms pode esconder que 1% das requisições, o *p99*, leva 9 segundos.
+As **métricas** são números agregados no tempo: requisições por segundo, percentual de erros, latência, tamanho da fila. São baratas e ótimas para alertas, mas não contam a história de uma requisição. O livro *Site Reliability Engineering*, do Google, sugere começar por quatro sinais de ouro: latência, tráfego, erros e saturação. Para latência, use percentis: uma média de 300 ms pode esconder que 1% das requisições, o *p99*, leva 9 segundos. A média é aquela velha piada de estatística: com a cabeça no forno e os pés no freezer, a pessoa está, em média, numa temperatura agradável.
 
-Os **traces** acompanham uma requisição por todos os componentes. Um pedido do Rangô atravessa Nginx, API, gateway de pagamento, stream do Redis e workers, e o trace mostra a duração de cada trecho. Para isso, um identificador viaja junto, num cabeçalho HTTP ou num campo do evento. O padrão de mercado para os três sinais é o OpenTelemetry, que o capítulo 22 usa com a AWS.
+Os **traces** acompanham uma requisição por todos os componentes. Um pedido do Rangô atravessa Nginx, API, gateway de pagamento, stream do Redis e workers, e o trace mostra a duração de cada trecho. É o rastreamento de encomenda que diz onde o pacote parou, em vez de "objeto em trânsito" por nove dias seguidos. Para isso, um identificador viaja junto, num cabeçalho HTTP ou num campo do evento. O padrão de mercado para os três sinais é o OpenTelemetry, que o capítulo 22 usa com a AWS.
 
-Os sinais só servem se alguém olhar na hora certa, e por isso existem os **alertas**. Alerte sobre sintomas que o usuário sente (erros acima de 2% por cinco minutos, p99 acima de 3 segundos, mensagem mais antiga da fila parada há dez minutos), em vez de causas internas que podem ser inofensivas (CPU em 85%). Uma mensagem na DLQ do capítulo 5 também precisa disparar alerta. E todo alerta precisa exigir uma ação, senão a equipe aprende a ignorá-los.
+Os sinais só servem se alguém olhar na hora certa, e por isso existem os **alertas**. Alerte sobre sintomas que o usuário sente (erros acima de 2% por cinco minutos, p99 acima de 3 segundos, mensagem mais antiga da fila parada há dez minutos), em vez de causas internas que podem ser inofensivas (CPU em 85%). Uma mensagem na DLQ do capítulo 5 também precisa disparar alerta. E todo alerta precisa exigir uma ação, senão a equipe aprende a ignorá-los, como o alarme de carro que dispara toda noite na rua e já não faz ninguém nem olhar pela janela.
 
-### Mão na massa: logs estruturados e um ID por requisição
+### Na prática: logs estruturados e um ID por requisição
 
-Vamos fazer cada requisição da API gerar uma linha de log em JSON, com um identificador que também volta para o cliente. Crie `backend/app/logs.py`:
+A ideia é cada requisição da API gerar uma linha de log em JSON, com um identificador que também volta para o cliente. O formato fica em `backend/app/logs.py`:
 
 ```python
 # backend/app/logs.py
@@ -443,7 +443,7 @@ def configurar() -> None:
     logging.basicConfig(level=logging.INFO, handlers=[saida], force=True)
 ```
 
-Em `backend/app/main.py`, configure os logs e acrescente o middleware. Os imports de `time` e `uuid` vão para o topo, junto dos outros; `INSTANCIA` já existe desde o capítulo 4:
+Em `backend/app/main.py`, os logs são configurados e o middleware entra. Os imports de `time` e `uuid` vão para o topo, junto dos outros; `INSTANCIA` já existe desde o capítulo 4:
 
 ```python
 # backend/app/main.py (trechos novos)
@@ -481,7 +481,7 @@ async def registrar_requisicao(request, call_next):
 
 Se a requisição já trouxer um `X-Request-ID`, ele é reaproveitado; senão, a API cria um. O ID volta na resposta, e com ele você acha a linha exata do log.
 
-Reconstrua a imagem `rango-api:0.5.0`, suba o Compose (ele recria o canário com a imagem nova) e mande 20 requisições para `/restaurantes`. Com 10% do tráfego, umas duas devem cair no canário:
+Depois de reconstruir a imagem `rango-api:0.5.0` e subir o Compose (ele recria o canário com a imagem nova), o exemplo manda 20 requisições para `/restaurantes`. Com 10% do tráfego, umas duas devem cair no canário:
 
 ```bash
 docker build -t rango-api:0.5.0 backend
@@ -497,7 +497,7 @@ A saída será parecida com esta. A primeira linha pegou o cache expirado e pago
 {"ts":"2026-10-16T14:02:11.913+00:00","nivel":"INFO","msg":"requisicao","request_id":"a17e6b90-2c4d-4e8f-9a0b-c1d2e3f40516","metodo":"GET","rota":"/restaurantes","status":200,"duracao_ms":1.9,"instancia":"canario"}
 ```
 
-Só o canário aparece porque as instâncias estáveis ainda rodam a 0.4.0. O `fromjson?` do `jq` descarta as linhas que não são JSON, como as mensagens do Uvicorn.
+Só o canário aparece porque as instâncias estáveis ainda rodam a 0.4.0. Por enquanto, ele é o único funcionário que preenche o relatório do que fez. O `fromjson?` do `jq` descarta as linhas que não são JSON, como as mensagens do Uvicorn.
 
 Agora a pergunta "quais requisições passaram de 1 segundo?" vira um filtro, em vez de uma leitura de olhos apertados:
 
@@ -512,17 +512,17 @@ Para desligar tudo, `docker compose down`.
 
 ## Incidentes e postmortems
 
-Mesmo com tudo isso, algo vai quebrar. O que muda é como a equipe reage.
+Mesmo com tudo isso, algo vai quebrar. A lei de Murphy não aceita pull request. O que muda é como a equipe reage.
 
-Durante um **incidente**, ajuda ter papéis claros, mesmo numa equipe de três pessoas: alguém coordena, alguém mexe nos sistemas, alguém comunica clientes e restaurantes. A prioridade é estancar o problema. Se o deploy de 20 minutos atrás coincide com o aumento de erros, faça o rollback primeiro e investigue com o sistema estável. Anote horários e ações num canal único, porque a memória de madrugada falha.
+Durante um **incidente**, ajuda ter papéis claros, mesmo numa equipe de três pessoas: alguém coordena, alguém mexe nos sistemas, alguém comunica clientes e restaurantes. Numa equipe de três, alguém acaba acumulando funções, e costuma ser quem já estava de pijama. A prioridade é estancar o problema. Se o deploy de 20 minutos atrás coincide com o aumento de erros, faça o rollback primeiro e investigue com o sistema estável. Anote horários e ações num canal único, porque a memória de madrugada falha. Às 4h, ninguém lembra se reiniciou o serviço uma ou três vezes, e todo mundo jura que foram duas.
 
 Depois vem o **postmortem**: linha do tempo, impacto, causas e ações de correção com responsável e prazo. Ele precisa ser ***blameless***, sem culpados. A pergunta certa é "o que no sistema permitiu que uma pessoa apagasse produção com um comando?", e a errada é "quem apagou?". Se a conclusão for "a pessoa errou", a mesma falha volta com outra pessoa. O postmortem do sábado do Rangô, aliás, é este capítulo.
 
 ## Armadilhas e casos reais
 
-> **Na vida real:** em 31 de janeiro de 2017, um engenheiro da GitLab, cansado após horas lidando com um problema de replicação, rodou um comando para apagar o diretório de dados do banco no servidor errado: a primária, em vez da réplica. Cerca de 300 GB de dados de produção sumiram em segundos. Ao procurar os backups, a equipe descobriu que o `pg_dump` agendado falhava havia tempo sem ninguém saber: ele usava os binários do PostgreSQL 9.2 contra um servidor 9.6, e os e-mails de alerta sobre a falha eram rejeitados pelo servidor de e-mail. A recuperação veio de um snapshot de disco feito cerca de seis horas antes, por acaso, para popular o ambiente de homologação. Foram perdidas cerca de seis horas de dados, afetando milhares de projetos, comentários e contas de usuários. A GitLab transmitiu a restauração ao vivo e publicou um postmortem detalhado, que virou leitura obrigatória sobre backups.
+> **Na vida real:** em 31 de janeiro de 2017, um engenheiro da GitLab, cansado após horas lidando com um problema de replicação, rodou um comando para apagar o diretório de dados do banco no servidor errado: a primária, em vez da réplica. Cerca de 300 GB de dados de produção sumiram em segundos. Ao procurar os backups, a equipe descobriu que o `pg_dump` agendado falhava havia tempo sem ninguém saber: ele usava os binários do PostgreSQL 9.2 contra um servidor 9.6, e os e-mails de alerta sobre a falha eram rejeitados pelo servidor de e-mail. Os alarmes existiam; só não tinham para quem tocar. A recuperação veio de um snapshot de disco feito cerca de seis horas antes, por acaso, para popular o ambiente de homologação. Foram perdidas cerca de seis horas de dados, afetando milhares de projetos, comentários e contas de usuários. A GitLab transmitiu a restauração ao vivo e publicou um postmortem detalhado, que virou leitura obrigatória sobre backups.
 
-> **Na vida real:** em 1º de agosto de 2012, a Knight Capital, grande operadora do mercado de ações americano, fez o deploy manual de um código novo em oito servidores, e um deles ficou sem a versão nova. O código novo reaproveitava uma flag que, no servidor desatualizado, ativou uma funcionalidade antiga, desativada havia anos. Em cerca de 45 minutos, o sistema enviou milhões de ordens. Segundo a SEC, o regulador americano, o prejuízo passou de 460 milhões de dólares. Um deploy automatizado e idêntico em todos os servidores teria evitado o problema.
+> **Na vida real:** em 1º de agosto de 2012, a Knight Capital, grande operadora do mercado de ações americano, fez o deploy manual de um código novo em oito servidores, e um deles ficou sem a versão nova. O código novo reaproveitava uma flag que, no servidor desatualizado, ativou uma funcionalidade antiga, desativada havia anos. Em cerca de 45 minutos, o sistema enviou milhões de ordens. Segundo a SEC, o regulador americano, o prejuízo passou de 460 milhões de dólares. Dá mais de 10 milhões por minuto, uma taxa que nenhuma hora extra cobre. Um deploy automatizado e idêntico em todos os servidores teria evitado o problema.
 
 > **Na vida real:** em 19 de julho de 2024, a CrowdStrike distribuiu uma atualização de configuração do seu agente de segurança para Windows a todos os clientes ao mesmo tempo. Um defeito no arquivo derrubou cerca de 8,5 milhões de computadores, segundo a Microsoft, parando companhias aéreas, hospitais e bancos. Entre as correções anunciadas pela empresa estava a distribuição gradual das atualizações, começando por um grupo pequeno: um canário.
 
@@ -531,7 +531,7 @@ Algumas armadilhas são menos famosas e muito mais frequentes:
 - **Backup sem monitoramento.** O cron parou de rodar porque o disco encheu, e o último backup tem dois meses. Alerte quando o backup *não* acontecer, além de quando ele falhar.
 - **Backup na mesma conta e com as mesmas credenciais.** Um invasor que apaga o banco apaga o backup no mesmo minuto. Cópias em outra conta, com exclusão bloqueada, resolvem isso; o capítulo 23 volta ao assunto com o AWS Backup.
 - **Failover nunca ensaiado.** O dia do desastre é o pior dia para descobrir que a aplicação guarda o IP da primária num arquivo de configuração.
-- **Alerta demais.** Uma equipe que recebe 200 alertas por semana deixa de ler todos, inclusive o que importava.
+- **Alerta demais.** Uma equipe que recebe 200 alertas por semana deixa de ler todos, inclusive o que importava. É a fábula do menino que gritava lobo, versão plantão.
 
 ## Resumo
 
@@ -548,9 +548,9 @@ Algumas armadilhas são menos famosas e muito mais frequentes:
 
 ## Ponte: hora de alugar a infraestrutura
 
-Olhe a lista de tarefas que este capítulo deixou: um Postgres com réplica em outro prédio, arquivamento contínuo de WAL e failover sem split brain; backups em outra região; servidores recriados a partir de código; logs e métricas centralizados, com alertas que acordam a pessoa certa; um cofre para segredos; um destino para o pipeline. Montar tudo isso em servidores próprios exigiria uma equipe de infraestrutura maior que o Rangô inteiro. E você ainda nem tem o computador com IP público ligado o tempo todo que o capítulo 1 prometeu.
+A lista de tarefas que este capítulo deixou é comprida: um Postgres com réplica em outro prédio, arquivamento contínuo de WAL e failover sem split brain; backups em outra região; servidores recriados a partir de código; logs e métricas centralizados, com alertas que acordam a pessoa certa; um cofre para segredos; um destino para o pipeline. Montar tudo isso em servidores próprios exigiria uma equipe de infraestrutura maior que o Rangô inteiro, com um orçamento de café proporcional ao tamanho da equipe. E você ainda nem tem o computador com IP público ligado o tempo todo que o capítulo 1 prometeu.
 
-A Parte I mostrou o que precisa existir. A Parte II responde onde e como. No próximo capítulo, você vai abrir uma conta na AWS e, antes de criar qualquer servidor, vai configurar a única coisa que impede uma fatura de quatro dígitos no fim do mês: um alarme de cobrança.
+A Parte I mostrou o que precisa existir. A Parte II responde onde e como. No próximo capítulo, o Rangô ganha uma conta na AWS e, antes de criar qualquer servidor, configura a única coisa que impede uma fatura de quatro dígitos no fim do mês: um alarme de cobrança.
 
 ## Referências
 

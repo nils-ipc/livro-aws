@@ -1,16 +1,16 @@
 # Serverless com Lambda e API Gateway
 
-No capítulo anterior, o deploy do Rangô saiu das suas mãos. Um push na `main` dispara o GitHub Actions, que se autentica na AWS por OIDC, constrói a imagem num runner ARM, envia ao ECR e roda o `cdk deploy`, com blue/green no ECS e rollback automático quando o alarme de erros 5xx dispara. No fim, a stack `RangoProducao` foi destruída, com snapshot do banco, e os workflows ficaram desabilitados. E o Bruno, animado com a facilidade, já tinha um pedido novo.
+No capítulo anterior, o deploy do Rangô saiu das suas mãos. Um push na `main` dispara o GitHub Actions, que se autentica na AWS por OIDC, constrói a imagem num runner ARM, envia ao ECR e roda o `cdk deploy`, com blue/green no ECS e rollback automático quando o alarme de erros 5xx dispara. No fim, a stack `RangoProducao` foi destruída, com snapshot do banco, e os workflows ficaram desabilitados. E o Bruno, animado com a facilidade, já tinha um pedido novo. Ele é o tipo de cliente que transforma cada melhoria do sistema em três pedidos novos, e é por isso que o Rangô ainda existe.
 
 ## Seis minutos de trabalho, 24 horas de conta
 
-O pedido é simples: um resumo de vendas para cada restaurante às 11h, às 15h e às 23h. Quantos pedidos entraram no período, quanto faturaram e qual foi o ticket médio. Os pratos mais pedidos ficam para depois, porque os itens ainda não estão numa tabela. Quarenta linhas de Python, uma consulta ao Postgres e um e-mail.
+O pedido é simples: um resumo de vendas para cada restaurante às 11h, às 15h e às 23h. Quantos pedidos entraram no período, quanto faturaram e qual foi o ticket médio. Os pratos mais pedidos ficam para depois, porque os itens ainda não estão numa tabela. Quarenta linhas de Python, uma consulta ao Postgres e um e-mail. Coisa de fim de tarde, se ninguém marcar reunião.
 
-Com o que você tem, o caminho óbvio é um terceiro worker no ECS. Um laço que calcula quanto falta até a próxima hora cheia, dorme, acorda, gera o resumo e volta a dormir. Funciona. Agora faça a conta. A consulta e o envio levam uns dois segundos por execução. Três execuções por dia dão seis segundos de trabalho. A task de 0,25 vCPU e 512 MB fica ligada 86.400 segundos por dia. Você estaria pagando por 99,99% de sono.
+Com o que você tem, o caminho óbvio é um terceiro worker no ECS. Um laço que calcula quanto falta até a próxima hora cheia, dorme, acorda, gera o resumo e volta a dormir. Funciona. Agora, a conta. A consulta e o envio levam uns dois segundos por execução. Três execuções por dia dão seis segundos de trabalho. A task de 0,25 vCPU e 512 MB fica ligada 86.400 segundos por dia. Você estaria pagando por 99,99% de sono. Nem gato de apartamento tem uma taxa de ocupação tão baixa.
 
 O valor é pequeno: o capítulo 17 estimou uns US$ 14 por mês para os dois workers, então uma task dessas fica perto de US$ 7. O problema aparece quando o padrão se repete. O Bruno já quer um relatório semanal, uma limpeza dos carrinhos abandonados e, o mais urgente, um endereço para receber os avisos do gateway de pagamento.
 
-O gateway acaba de liberar o PIX, que funciona diferente do cartão. O Rangô gera o código, o cliente paga no aplicativo do banco quando quiser, e minutos depois o gateway faz um POST num endereço do Rangô dizendo "a cobrança tal foi aprovada". Esse POST chama-se *webhook*. Ele chega em rajadas no almoço e no jantar, e quase nunca de madrugada.
+O gateway acaba de liberar o PIX, que funciona diferente do cartão. O Rangô gera o código, o cliente paga no aplicativo do banco quando quiser, e minutos depois o gateway faz um POST num endereço do Rangô dizendo "a cobrança tal foi aprovada". Esse POST chama-se *webhook*. É um telefonema às avessas: em vez de você ligar a cada minuto perguntando se o pagamento caiu, o gateway liga quando cai. Ele chega em rajadas no almoço e no jantar, e quase nunca de madrugada.
 
 O webhook poderia ser mais uma rota do FastAPI, e seria uma escolha razoável. Mas repare no padrão dos pedidos do Bruno: código pequeno, que roda de vez em quando, disparado por um evento. Manter algo ligado o tempo todo para isso é alugar um salão de festas para um jantar de três pessoas.
 
@@ -25,29 +25,29 @@ def handler(event, context):
     return {"ok": True}
 ```
 
-O `event` é um dicionário com os dados de quem chamou. Se foi uma regra de agendamento, vem o que você configurou nela. Se foi uma requisição HTTP, vêm o método, o caminho, os cabeçalhos e o corpo. O `context` traz metadados da execução, como o ID da requisição e quanto tempo resta antes do limite. Pense numa view do Django em que o `request` virou um dicionário e o framework foi substituído pela AWS.
+O `event` é um dicionário com os dados de quem chamou. Se foi uma regra de agendamento, vem o que você configurou nela. Se foi uma requisição HTTP, vêm o método, o caminho, os cabeçalhos e o corpo. O `context` traz metadados da execução, como o ID da requisição e quanto tempo resta antes do limite, uma ampulheta que muita reunião deveria ter. Pense numa view do Django em que o `request` virou um dicionário e o framework foi substituído pela AWS.
 
 ### O ambiente de execução por dentro
 
-Quando a primeira chamada chega, a Lambda cria um **ambiente de execução**: uma micro máquina virtual (Firecracker, a mesma tecnologia por trás do Fargate) com o runtime Python, o seu código e a memória que você configurou. A fase **INIT** acontece uma vez: a Lambda inicia o interpretador e importa o seu módulo, e tudo o que está fora do `handler` roda aqui (imports, clientes do boto3, leitura de segredos). A fase **INVOKE** acontece a cada chamada. A fase **SHUTDOWN** vem quando a Lambda decide descartar o ambiente ocioso, num momento que você não controla.
+Quando a primeira chamada chega, a Lambda cria um **ambiente de execução**: uma micro máquina virtual (Firecracker, a mesma tecnologia por trás do Fargate) com o runtime Python, o seu código e a memória que você configurou. A fase **INIT** acontece uma vez: a Lambda inicia o interpretador e importa o seu módulo, e tudo o que está fora do `handler` roda aqui (imports, clientes do boto3, leitura de segredos). A fase **INVOKE** acontece a cada chamada. A fase **SHUTDOWN** vem quando a Lambda decide descartar o ambiente ocioso, num momento que você não controla, como o garçom que recolhe o prato quando ainda sobrava uma batata.
 
-Entre uma chamada e outra, o ambiente fica congelado. Se outra chamada chega, a Lambda descongela e chama o `handler` de novo, sem repetir o INIT. As variáveis globais, a conexão aberta com o banco e os arquivos em `/tmp` continuam lá. A chamada que precisa de um ambiente novo é o *cold start*, que o capítulo 4 prometeu explicar por dentro: o INIT somado à primeira chamada. A que encontra um ambiente pronto é o *warm start*.
+Entre uma chamada e outra, o ambiente fica congelado. Se outra chamada chega, a Lambda descongela e chama o `handler` de novo, sem repetir o INIT, como a pizza da noite anterior, que só precisa de um minuto no micro-ondas. As variáveis globais, a conexão aberta com o banco e os arquivos em `/tmp` continuam lá. A chamada que precisa de um ambiente novo é o *cold start*, que o capítulo 4 prometeu explicar por dentro: o INIT somado à primeira chamada. A que encontra um ambiente pronto é o *warm start*.
 
-Um detalhe muda o modelo mental: **cada ambiente atende uma chamada por vez**. Se dez requisições chegam juntas, a Lambda precisa de dez ambientes. O número de ambientes ocupados ao mesmo tempo é a **concorrência** da função. Um processo Uvicorn atende dezenas de requisições ao mesmo tempo com `async`; na Lambda, a concorrência vem de multiplicar processos Python inteiros.
+Um detalhe muda o modelo mental: **cada ambiente atende uma chamada por vez**. Se dez requisições chegam juntas, a Lambda precisa de dez ambientes. Lembra o atendente de padaria que só faz um pão na chapa por vez, com a diferença de que a Lambda contrata outro atendente na hora. O número de ambientes ocupados ao mesmo tempo é a **concorrência** da função. Um processo Uvicorn atende dezenas de requisições ao mesmo tempo com `async`; na Lambda, a concorrência vem de multiplicar processos Python inteiros.
 
 ### O que pesa no cold start
 
-O tempo do INIT depende do tamanho do pacote, dos imports (`import pandas` sozinho custa centenas de milissegundos), do código de inicialização e da memória. Na Lambda, você escolhe a memória, entre 128 MB e 10.240 MB, e a CPU vem junto, em proporção: com 1.769 MB, a função recebe o equivalente a uma vCPU. Uma função com imports pesados pode ficar mais rápida e até mais barata com mais memória, porque o tempo cai mais do que o preço por milissegundo sobe.
+O tempo do INIT depende do tamanho do pacote, dos imports (`import pandas` sozinho custa centenas de milissegundos; o pandas é o convidado que chega com três malas para passar o fim de semana), do código de inicialização e da memória. Na Lambda, você escolhe a memória, entre 128 MB e 10.240 MB, e a CPU vem junto, em proporção: com 1.769 MB, a função recebe o equivalente a uma vCPU. Uma função com imports pesados pode ficar mais rápida e até mais barata com mais memória, porque o tempo cai mais do que o preço por milissegundo sobe.
 
-Muito texto antigo recomenda evitar VPC por causa de cold starts de vários segundos. A AWS mudou esse mecanismo em 2019, e hoje as interfaces de rede são criadas quando a função é configurada, não a cada cold start.
+Muito texto antigo recomenda evitar VPC por causa de cold starts de vários segundos. A AWS mudou esse mecanismo em 2019, e hoje as interfaces de rede são criadas quando a função é configurada, não a cada cold start. O conselho antigo sobrevive em respostas de fórum como mito urbano, o jacaré no esgoto da computação em nuvem.
 
-Até julho de 2025, o INIT de funções em zip com runtime gerenciado não era cobrado. Desde 1º de agosto de 2025, ele é cobrado em todas as configurações, pelo preço normal de duração, e aparece somado no `Billed Duration` dos logs. Para quem inicializava coisas pesadas fora do handler contando com o INIT grátis, a conta mudou.
+Até julho de 2025, o INIT de funções em zip com runtime gerenciado não era cobrado. Desde 1º de agosto de 2025, ele é cobrado em todas as configurações, pelo preço normal de duração, e aparece somado no `Billed Duration` dos logs. Para quem inicializava coisas pesadas fora do handler contando com o INIT grátis, a conta mudou. Almoço grátis, como sempre, tinha data de validade.
 
-Quando o cold start incomoda, existem duas saídas pagas. A *provisioned concurrency* mantém um número fixo de ambientes já inicializados, prontos para atender, e você paga por eles mesmo parados; é a recomendação da documentação quando a latência precisa ser previsível. O *SnapStart*, disponível para Python 3.12 em diante desde novembro de 2024, tira uma fotografia da memória do ambiente depois do INIT e restaura a partir dela nos cold starts seguintes. Ele não funciona com imagens de container, e o código precisa tomar cuidado com o que fica na fotografia: uma conexão aberta com o banco, por exemplo, não sobrevive à restauração.
+Quando o cold start incomoda, existem duas saídas pagas. A *provisioned concurrency* mantém um número fixo de ambientes já inicializados, prontos para atender, e você paga por eles mesmo parados; é a recomendação da documentação quando a latência precisa ser previsível. O *SnapStart*, disponível para Python 3.12 em diante desde novembro de 2024, tira uma fotografia da memória do ambiente depois do INIT e restaura a partir dela nos cold starts seguintes. Ele não funciona com imagens de container, e o código precisa tomar cuidado com o que fica na fotografia: uma conexão aberta com o banco, por exemplo, não sobrevive à restauração. Uma foto sua ao telefone não mantém a ligação ativa.
 
 ### Os limites que você precisa conhecer
 
-A Lambda tem limites fixos que moldam o que cabe nela. Os valores abaixo são da documentação de cotas, consultada em outubro de 2026; confira a página oficial antes de projetar algo perto deles.
+A Lambda tem limites fixos que moldam o que cabe nela, como a mala de mão na companhia aérea: o que não cabe vai despachado para outro serviço. Os valores abaixo são da documentação de cotas, consultada em outubro de 2026; confira a página oficial antes de projetar algo perto deles.
 
 | Limite | Valor |
 |--------|-------|
@@ -62,33 +62,33 @@ A Lambda tem limites fixos que moldam o que cabe nela. Os valores abaixo são da
 | Variáveis de ambiente | 4 KB no total |
 | Concorrência por região | 1.000 por padrão (contas novas começam com menos) |
 
-Os 15 minutos deixam de fora processamentos longos, que ficam melhor numa task do ECS. Os 4 KB de variáveis de ambiente reforçam o caminho do capítulo 16: o Parameter Store e o Secrets Manager guardam os valores, e a função recebe só os nomes.
+Os 15 minutos deixam de fora processamentos longos, que ficam melhor numa task do ECS. Função que precisa de mais de 15 minutos está pedindo para virar outra coisa quando crescer. Os 4 KB de variáveis de ambiente reforçam o caminho do capítulo 16: o Parameter Store e o Secrets Manager guardam os valores, e a função recebe só os nomes.
 
-O limite de 1.000 de concorrência vale para a região inteira, somando todas as funções, e cada função ganha no máximo 1.000 ambientes novos a cada 10 segundos. A documentação aponta um descompasso: o API Gateway aceita por padrão 10.000 requisições por segundo, a Lambda roda 1.000 ambientes. Se cada requisição leva um segundo, o excesso volta como erro de *throttling*. A solução é pedir aumento da cota antes de precisar, como o capítulo 4 recomendou pré-escalar antes do programa de TV.
+O limite de 1.000 de concorrência vale para a região inteira, somando todas as funções, e cada função ganha no máximo 1.000 ambientes novos a cada 10 segundos. A documentação aponta um descompasso: o API Gateway aceita por padrão 10.000 requisições por segundo, a Lambda roda 1.000 ambientes. Se cada requisição leva um segundo, o excesso volta como erro de *throttling*. A solução é pedir aumento da cota antes de precisar, como o capítulo 4 recomendou pré-escalar antes do programa de TV. Pedir aumento de cota no dia do pico é como reservar mesa às 20h do Dia dos Namorados.
 
 ### Runtimes e layers
 
-Em outubro de 2026, os runtimes Python de uso geral são `python3.14`, `python3.13` e `python3.12`, todos sobre Amazon Linux 2023 e disponíveis em x86_64 e arm64 (Graviton, cerca de 20% mais barato por GB-segundo). O `python3.12` tem descontinuação marcada para 31 de outubro de 2028. O Rangô usa essa versão, a mesma da imagem do container desde o capítulo 3.
+Em outubro de 2026, os runtimes Python de uso geral são `python3.14`, `python3.13` e `python3.12`, todos sobre Amazon Linux 2023 e disponíveis em x86_64 e arm64 (Graviton, cerca de 20% mais barato por GB-segundo). O `python3.12` tem descontinuação marcada para 31 de outubro de 2028, uma antecedência que, no ritmo da área, equivale a planejar a aposentadoria. O Rangô usa essa versão, a mesma da imagem do container desde o capítulo 3. Fidelidade de versão é raridade em software e merece registro.
 
-Uma *layer* é um zip extra que a Lambda descompacta em `/opt`. Se ele tiver uma pasta `python/`, ela entra no `sys.path`. O uso clássico é separar dependências do código: a layer leva o `psycopg` e o `boto3`, o pacote da função leva só os seus `.py`, e duas funções podem compartilhar a mesma layer. São no máximo cinco por função, dentro dos 250 MB descompactados. Cada publicação gera uma versão imutável, e layers não resolvem conflito de dependências: se duas trazem a mesma biblioteca, vence a primeira na ordem, sem aviso.
+Uma *layer* é um zip extra que a Lambda descompacta em `/opt`. Se ele tiver uma pasta `python/`, ela entra no `sys.path`. O uso clássico é separar dependências do código: a layer leva o `psycopg` e o `boto3`, o pacote da função leva só os seus `.py`, e duas funções podem compartilhar a mesma layer. São no máximo cinco por função, dentro dos 250 MB descompactados. Cada publicação gera uma versão imutável, e layers não resolvem conflito de dependências: se duas trazem a mesma biblioteca, vence a primeira na ordem, sem aviso. É o inferno de dependências servido em camadas, como uma lasanha em que cada andar traz o próprio molho.
 
 O runtime já vem com um `boto3`, mas a versão muda quando a AWS atualiza o runtime. A documentação recomenda empacotar o seu, com versão conhecida.
 
 ### As formas de chamar uma função
 
-Uma função Lambda não escuta nenhuma porta. Na **chamada síncrona**, quem chama espera a resposta; é o que o API Gateway faz. Na **chamada assíncrona**, quem chama entrega o evento e vai embora, a Lambda executa quando puder e, se a função falhar, tenta de novo duas vezes por padrão; é o que acontece quando o Amazon EventBridge dispara uma função num horário. No **mapeamento de origem de eventos**, a própria Lambda lê uma fila do SQS e chama a função com lotes de mensagens, modelo que o capítulo 21 usa.
+Uma função Lambda não escuta nenhuma porta. Ela não atende o interfone; alguém precisa subir e bater. Na **chamada síncrona**, quem chama espera a resposta; é o que o API Gateway faz. Na **chamada assíncrona**, quem chama entrega o evento e vai embora, a Lambda executa quando puder e, se a função falhar, tenta de novo duas vezes por padrão; é o que acontece quando o Amazon EventBridge dispara uma função num horário. No **mapeamento de origem de eventos**, a própria Lambda lê uma fila do SQS e chama a função com lotes de mensagens, modelo que o capítulo 21 usa.
 
-A AWS lançou variações recentes, como as Lambda Managed Instances e as durable functions, e passou a chamar as funções clássicas de *Event Functions*. Este capítulo fica com elas.
+A AWS lançou variações recentes, como as Lambda Managed Instances e as durable functions, e passou a chamar as funções clássicas de *Event Functions*. A relação da AWS com nomes de produto é complicada e renderia um livro à parte. Este capítulo fica com elas.
 
 ## A porta HTTP da função
 
-Para o webhook do PIX, o gateway de pagamento precisa de uma URL HTTPS. A Lambda não tem porta, então alguma coisa precisa receber a requisição HTTP, terminar o TLS, transformar tudo num `event` e chamar a função. Esse é o papel do Amazon API Gateway.
+Para o webhook do PIX, o gateway de pagamento precisa de uma URL HTTPS. A Lambda não tem porta, então alguma coisa precisa receber a requisição HTTP, terminar o TLS, transformar tudo num `event` e chamar a função. Esse é o papel do Amazon API Gateway, o recepcionista que atende a porta, confere quem chegou e só então chama a função na sala dos fundos.
 
-O API Gateway faz para a Lambda o que o ALB faz para as tasks do ECS, com autenticação, limite de requisições e rotas declaradas. Ele cobra por requisição, sem custo fixo por hora, enquanto o ALB do capítulo 13 custa uns US$ 23 por mês parado. As *function URLs*, que dão à função um endereço HTTPS sem API Gateway, servem para protótipos, mas não oferecem rotas nem limite de requisições.
+O API Gateway faz para a Lambda o que o ALB faz para as tasks do ECS, com autenticação, limite de requisições e rotas declaradas. Ele cobra por requisição, sem custo fixo por hora, enquanto o ALB do capítulo 13 custa uns US$ 23 por mês parado, como ingresso de show comprado para um show a que você não foi. As *function URLs*, que dão à função um endereço HTTPS sem API Gateway, servem para protótipos, mas não oferecem rotas nem limite de requisições.
 
 ### HTTP API ou REST API
 
-O API Gateway tem dois produtos para APIs HTTP comuns, com nomes que confundem: a REST API e a HTTP API. As duas recebem requisições REST. A diferença está nos recursos e no preço.
+O API Gateway tem dois produtos para APIs HTTP comuns, com nomes que confundem: a REST API e a HTTP API. As duas recebem requisições REST. É como ter dois restaurantes, um chamado "Comida" e outro chamado "Restaurante", ambos servindo comida. A diferença está nos recursos e no preço.
 
 | | HTTP API | REST API |
 |---|---|---|
@@ -102,7 +102,7 @@ O API Gateway tem dois produtos para APIs HTTP comuns, com nomes que confundem: 
 
 A REST API compensa quando você vende acesso à API para terceiros, com chave e cota por cliente, ou precisa do WAF na frente (capítulo 23). Para o webhook, que tem um único cliente e valida a assinatura no código, a HTTP API basta e custa menos de um terço. Os preços são aproximados, de referência, da página oficial; contas criadas desde 15 de julho de 2025 usam os créditos do plano gratuito do capítulo 7.
 
-A HTTP API tem dois limites fixos. A integração tem no máximo 30 segundos: se a função demorar mais, o cliente recebe erro, mesmo que a Lambda continue rodando. E o payload vai até 10 MB. Um relatório pesado sob demanda precisa responder logo com um "estou processando" e entregar depois, no modelo assíncrono do capítulo 5.
+A HTTP API tem dois limites fixos. A integração tem no máximo 30 segundos: se a função demorar mais, o cliente recebe erro, mesmo que a Lambda continue rodando, trabalhando com dedicação para alguém que já foi embora. E o payload vai até 10 MB. Um relatório pesado sob demanda precisa responder logo com um "estou processando", a versão HTTP do "seu pedido está sendo preparado", e entregar depois, no modelo assíncrono do capítulo 5.
 
 ### O evento que chega na função
 
@@ -125,11 +125,11 @@ Quando a HTTP API chama a Lambda, ela usa o formato de payload 2.0. O `event` fi
 }
 ```
 
-O corpo chega como texto cru, ou em base64 quando o `isBase64Encoded` vem `true`. A resposta da função é outro dicionário, com `statusCode`, `headers` e `body`.
+O corpo chega como texto cru, ou em base64 quando o `isBase64Encoded` vem `true`. A resposta da função é outro dicionário, com `statusCode`, `headers` e `body`. Na Lambda, até a resposta HTTP é um dicionário, e o Python nunca se sentiu tão em casa.
 
-## Mão na massa
+## Na prática
 
-O plano é colocar duas funções no Rangô. A `resumo-vendas` roda três vezes por dia, disparada por regras do EventBridge. A `webhook-pagamento` atende o POST do gateway, atrás de uma HTTP API. As duas leem o Postgres, então ficam dentro da VPC, nas subnets privadas, e compartilham uma layer com as dependências.
+O plano é colocar duas funções no Rangô. A `resumo-vendas` roda três vezes por dia, disparada por regras do EventBridge. A `webhook-pagamento` atende o POST do gateway, atrás de uma HTTP API. As duas leem o Postgres, então ficam dentro da VPC, nas subnets privadas, e compartilham uma layer com as dependências. O diagrama abaixo é o mais perto de arte que este livro vai chegar.
 
 ```text
 EventBridge (cron UTC) ──► Lambda resumo-vendas ──┐
@@ -140,11 +140,11 @@ Gateway de pagamento ──► HTTP API ──► Lambda      │    (subnets pr
                               └──► Secrets Manager (endpoint na VPC)
 ```
 
-Pré-requisitos: o repositório do capítulo 18, a AWS CLI v2 com o profile `rango-dev`, o Node e o CDK, o Docker rodando (o CDK usa um container para montar a layer) e o `jq`.
+Pré-requisitos: o repositório do capítulo 18, a AWS CLI v2 com o profile `rango-dev`, o Node e o CDK, o Docker rodando (o CDK usa um container para montar a layer) e o `jq`, o canivete suíço do JSON na linha de comando, cuja sintaxe todo mundo consulta toda vez.
 
 ### O ponto de partida
 
-A stack `RangoProducao` foi destruída no fim do capítulo 18. Ficaram a `RangoRegistro`, com as imagens no ECR, a `RangoPipeline`, com as roles do GitHub, a zona, o certificado, o bucket de fotos e o snapshot final do banco. Encontre o nome dele:
+A stack `RangoProducao` foi destruída no fim do capítulo 18. Ficaram a `RangoRegistro`, com as imagens no ECR, a `RangoPipeline`, com as roles do GitHub, a zona, o certificado, o bucket de fotos e o snapshot final do banco. A lista do que sobrevive a cada capítulo já parece testamento. O nome do snapshot aparece com:
 
 ```bash
 aws rds describe-db-snapshots --snapshot-type manual \
@@ -152,7 +152,7 @@ aws rds describe-db-snapshots --snapshot-type manual \
   --output text
 ```
 
-Coloque esse nome no `snapshot_db` do `rango-infra/app.py`, como nos capítulos anteriores. O deploy vai acontecer pelo pipeline, no fim das mudanças.
+Esse nome vai no `snapshot_db` do `rango-infra/app.py`, como nos capítulos anteriores. O deploy vai acontecer pelo pipeline, no fim das mudanças.
 
 ### O código das funções
 
@@ -169,14 +169,14 @@ backend/lambdas/
     └── webhook_pagamento.py
 ```
 
-Copie o certificado da CA do RDS que o capítulo 17 baixou:
+O certificado da CA do RDS que o capítulo 17 baixou é copiado para lá:
 
 ```bash
 mkdir -p backend/lambdas/camada backend/lambdas/rango_lambda
 cp backend/rds-ca.pem backend/lambdas/rango_lambda/
 ```
 
-O `backend/lambdas/camada/requirements.txt` tem as dependências da layer. Fixe as versões exatas com um `pip freeze`, como no capítulo 3; os intervalos abaixo são o ponto de partida:
+O `backend/lambdas/camada/requirements.txt` tem as dependências da layer. As versões exatas devem ser fixadas com um `pip freeze`, como no capítulo 3; os intervalos abaixo são o ponto de partida:
 
 ```text
 psycopg[binary]~=3.2
@@ -218,7 +218,7 @@ def conexao() -> psycopg.Connection:
     return _conexao
 ```
 
-O segredo é lido uma vez por ambiente, e a conexão aberta na primeira chamada é reaproveitada nas seguintes. Uma conexão por ambiente, sem pool, porque cada ambiente atende uma chamada por vez. Se o Postgres derrubou a conexão durante o congelamento, o `broken` acusa e a próxima chamada reconecta. E a rotação do capítulo 16 não atrapalha: na estratégia multi-user, a senha anterior vale até a rotação seguinte, e nenhum ambiente vive 30 dias. O `LAMBDA_TASK_ROOT` é a pasta do código, `/var/task`.
+O segredo é lido uma vez por ambiente, e a conexão aberta na primeira chamada é reaproveitada nas seguintes. Uma conexão por ambiente, sem pool, porque cada ambiente atende uma chamada por vez. Pool para uma chamada só seria piscina olímpica para um patinho de borracha. Se o Postgres derrubou a conexão durante o congelamento, o `broken` acusa e a próxima chamada reconecta. E a rotação do capítulo 16 não atrapalha: na estratégia multi-user, a senha anterior vale até a rotação seguinte, e nenhum ambiente vive 30 dias. O `LAMBDA_TASK_ROOT` é a pasta do código, `/var/task`.
 
 Agora o `resumo_vendas.py`:
 
@@ -253,9 +253,9 @@ def handler(event, context):
     return {"restaurantes": len(linhas), "horas": horas}
 ```
 
-O período chega no evento: às 11h, 12 horas desde as 23h da véspera; às 15h, 4 horas; às 23h, 8 horas. O `print` vai para o CloudWatch Logs, que captura a saída padrão.
+O período chega no evento: às 11h, 12 horas desde as 23h da véspera; às 15h, 4 horas; às 23h, 8 horas. O `print` vai para o CloudWatch Logs, que captura a saída padrão. É a primeira vez no livro em que um `print` é a solução oficial, e não a vergonha do code review.
 
-E o `webhook_pagamento.py`. Gateways assinam o corpo do webhook com uma chave compartilhada, para que ninguém marque um pedido como pago com um POST qualquer. O formato varia de gateway para gateway; aqui, o gateway hipotético manda um HMAC-SHA256 do corpo no cabeçalho `X-Assinatura`:
+E o `webhook_pagamento.py`. Gateways assinam o corpo do webhook com uma chave compartilhada, para que ninguém marque um pedido como pago com um POST qualquer. Sem isso, qualquer pessoa com `curl` e fome comeria de graça. O formato varia de gateway para gateway; aqui, o gateway hipotético manda um HMAC-SHA256 do corpo no cabeçalho `X-Assinatura`:
 
 ```python
 import base64
@@ -314,13 +314,13 @@ def handler(event, context):
     return resposta(200, {"pedido_id": str(pedido_id), "status": status})
 ```
 
-A assinatura é conferida sobre os bytes crus, antes de interpretar o JSON, porque reformatar o JSON muda o HMAC. O `compare_digest` compara em tempo constante, para a demora não revelar quantos caracteres batem. E o `UPDATE` com `status = 'pago'` é idempotente, como no capítulo 5: gateways reenviam webhooks quando não recebem 200, e o aviso repetido deixa o pedido no mesmo estado.
+A assinatura é conferida sobre os bytes crus, antes de interpretar o JSON, porque reformatar o JSON muda o HMAC. O `compare_digest` compara em tempo constante, para a demora não revelar quantos caracteres batem. É um cofre que não faz clique quando você acerta um número. E o `UPDATE` com `status = 'pago'` é idempotente, como no capítulo 5: gateways reenviam webhooks quando não recebem 200, e o aviso repetido deixa o pedido no mesmo estado.
 
 > **Armadilha:** Código de autenticação, verificação de assinatura e criptografia é o lugar onde um detalhe errado vira brecha. Use o esquema exato que o seu gateway documenta (muitos incluem um timestamp no cálculo, para impedir que alguém reenvie um aviso antigo), prefira a biblioteca oficial dele quando existir e peça a revisão de alguém de segurança antes de ligar o webhook em produção.
 
 ### A stack
 
-No `rango-infra/rango_infra/rango_infra_stack.py`, acrescente os imports:
+No `rango-infra/rango_infra/rango_infra_stack.py`, entram os imports:
 
 ```python
 from aws_cdk import (
@@ -364,7 +364,7 @@ Primeiro a layer. O CDK monta o zip dentro de um container:
         )
 ```
 
-Os parâmetros `--platform`, `--implementation`, `--python-version` e `--only-binary` pedem ao pip as *wheels* para Linux arm64 com CPython 3.12, qualquer que seja a máquina do deploy. É o primo do `exec format error` do capítulo 3, e a mensagem de erro está nas armadilhas.
+Os parâmetros `--platform`, `--implementation`, `--python-version` e `--only-binary` pedem ao pip as *wheels* para Linux arm64 com CPython 3.12, qualquer que seja a máquina do deploy. É o primo do `exec format error` do capítulo 3, da família de erros que só aparecem depois do deploy e nunca faltam a uma festa. A mensagem de erro está nas armadilhas.
 
 Depois, o Security Group das funções e a liberação no banco:
 
@@ -375,9 +375,9 @@ Depois, o Security Group das funções e a liberação no banco:
         db.connections.allow_default_port_from(sg_lambdas, "Lambdas no Postgres")
 ```
 
-A descrição vai sem acento pelo motivo do capítulo 9. As funções alcançam o Secrets Manager pelo endpoint do capítulo 16, mas não a internet: as subnets são `PRIVATE_ISOLATED`, sem NAT. Uma função que precisasse chamar a API do gateway traria de volta a conta do NAT Gateway do capítulo 10.
+A descrição vai sem acento pelo motivo do capítulo 9; a AWS e o til ainda não fizeram as pazes. As funções alcançam o Secrets Manager pelo endpoint do capítulo 16, mas não a internet: as subnets são `PRIVATE_ISOLATED`, sem NAT. Uma função que precisasse chamar a API do gateway traria de volta a conta do NAT Gateway do capítulo 10, o fantasma que este livro passou capítulos tentando exorcizar.
 
-Uma função auxiliar evita repetir a configuração comum:
+Uma função auxiliar evita repetir a configuração comum, e evita também repetir a história da linha copiada da Cantina da Nona:
 
 ```python
         codigo_lambdas = lambda_.Code.from_asset("../backend/lambdas/rango_lambda")
@@ -413,7 +413,7 @@ Uma função auxiliar evita repetir a configuração comum:
             return fn
 ```
 
-Cada função ganha uma role própria, com a policy gerenciada de logs e de interfaces de rede na VPC. O `grant_read` soma a leitura do segredo e o `kms:Decrypt` na chave do capítulo 16. O grupo de logs explícito evita uma armadilha que aparece mais adiante.
+Cada função ganha uma role própria, com a policy gerenciada de logs e de interfaces de rede na VPC. O `grant_read` soma a leitura do segredo e o `kms:Decrypt` na chave do capítulo 16. O grupo de logs explícito evita uma armadilha que aparece mais adiante, num suspense de novela, com a diferença de que aqui a revelação sai no mesmo capítulo.
 
 A função de resumo e os três horários:
 
@@ -439,9 +439,9 @@ A função de resumo e os três horários:
             )
 ```
 
-As regras do EventBridge entendem cron apenas em UTC. Brasília está em UTC−3 o ano todo desde o fim do horário de verão, em 2019: 11h vira 14h, 15h vira 18h e 23h vira 2h. O EventBridge Scheduler, do capítulo 21, aceita fuso horário e evita essa conta.
+As regras do EventBridge entendem cron apenas em UTC. Brasília está em UTC−3 o ano todo desde o fim do horário de verão, em 2019: 11h vira 14h, 15h vira 18h e 23h vira 2h. O EventBridge Scheduler, do capítulo 21, aceita fuso horário e evita essa conta. Fuso horário é aquele problema que todo programador acha simples até a primeira vez.
 
-O `retry_attempts=0` é deliberado. Com as duas novas tentativas padrão, uma falha depois de alguns e-mails enviados mandaria tudo de novo, e o dono da Cantina da Nona receberia dois resumos iguais. O Bruno prefere um a menos a um duplicado; a falha vai precisar de alarme, assunto do capítulo 22. O `timeout` de 60 segundos também: o padrão de 3 segundos é curto para um cold start que busca segredo e abre conexão TLS.
+O `retry_attempts=0` é deliberado. Com as duas novas tentativas padrão, uma falha depois de alguns e-mails enviados mandaria tudo de novo, e o dono da Cantina da Nona receberia dois resumos iguais, e ligaria para perguntar se tinha vendido o dobro. O Bruno prefere um a menos a um duplicado; a falha vai precisar de alarme, assunto do capítulo 22. O `timeout` de 60 segundos também: o padrão de 3 segundos é curto para um cold start que busca segredo e abre conexão TLS.
 
 Agora o webhook, o segredo dele e a HTTP API:
 
@@ -480,13 +480,13 @@ Agora o webhook, o segredo dele e a HTTP API:
         CfnOutput(self, "SegredoWebhookArn", value=segredo_webhook.secret_arn)
 ```
 
-O segredo nasce com valor aleatório, útil nos testes. Em produção, o gateway gera a chave e você grava com `aws secretsmanager put-secret-value`, fora do código e do template. O nome fica a cargo do CDK porque um segredo apagado passa dias em exclusão agendada, e um nome fixo impediria recriar a stack nesse intervalo.
+O segredo nasce com valor aleatório, útil nos testes: 48 caracteres que nenhum ser humano vai decorar, e é bom que seja assim. Em produção, o gateway gera a chave e você grava com `aws secretsmanager put-secret-value`, fora do código e do template. O nome fica a cargo do CDK porque um segredo apagado passa dias em exclusão agendada, e um nome fixo impediria recriar a stack nesse intervalo.
 
-O `reserved_concurrent_executions=10` reserva dez ambientes só para o webhook e, ao mesmo tempo, limita o webhook a dez, protegendo o banco. Um `db.t4g.micro` aceita pouco mais de cem conexões, teto que o capítulo 13 já encontrou. Com o limite, o excesso de uma rajada recebe erro 429, e o gateway tenta de novo depois. A permissão para o API Gateway chamar a função, o CDK cria na resource-based policy dela, a mesma ideia da bucket policy do capítulo 11.
+O `reserved_concurrent_executions=10` reserva dez ambientes só para o webhook e, ao mesmo tempo, limita o webhook a dez, protegendo o banco. Um `db.t4g.micro` aceita pouco mais de cem conexões, teto que o capítulo 13 já encontrou. Com o limite, o excesso de uma rajada recebe erro 429, e o gateway tenta de novo depois. O 429 é o "volte mais tarde" educado da web: ninguém gosta de ouvir, mas é melhor do que a cozinha pegar fogo. A permissão para o API Gateway chamar a função, o CDK cria na resource-based policy dela, a mesma ideia da bucket policy do capítulo 11.
 
 ### Antes do deploy, a cota da conta
 
-A reserva de concorrência tem uma regra: a conta precisa manter pelo menos 100 execuções não reservadas. Numa conta nova, com cota reduzida, essa conta não fecha. Confira:
+A reserva de concorrência tem uma regra: a conta precisa manter pelo menos 100 execuções não reservadas. Numa conta nova, com cota reduzida, essa conta não fecha. Sim, a conta da conta; o português também tem seus problemas de namespace. Para conferir:
 
 ```bash
 aws lambda get-account-settings \
@@ -505,18 +505,18 @@ Specified ReservedConcurrentExecutions for function decreases account's
 UnreservedConcurrentExecution below its minimum value of [100].
 ```
 
-Nesse caso, peça o aumento pelo Service Quotas (cota "Concurrent executions" do serviço AWS Lambda) e, enquanto ele não sai, comente a linha `reserved_concurrent_executions`.
+Nesse caso, a saída é pedir o aumento pelo Service Quotas (cota "Concurrent executions" do serviço AWS Lambda) e, enquanto ele não sai, comentar a linha `reserved_concurrent_executions`.
 
 ### O deploy pelo pipeline
 
-Reative os workflows desabilitados no fim do capítulo 18:
+Primeiro, os workflows desabilitados no fim do capítulo 18 voltam a valer:
 
 ```bash
 gh workflow enable ci.yaml
 gh workflow enable renovar-tasks.yaml
 ```
 
-Faça o commit de `backend/lambdas/` e `rango-infra/` e envie para a `main`. Depois da sua aprovação no environment `producao`, o `cdk deploy` roda o container que monta a layer e publica os zips no bucket do bootstrap. O runner `ubuntu-24.04-arm` já tem Docker, e a role `rango-github-deploy` não precisa de nada novo, porque as roles do bootstrap que ela assume fazem o trabalho. A stack inteira volta, com o banco do snapshot, a API no ECS e o front. No fim, pegue as saídas:
+O commit de `backend/lambdas/` e `rango-infra/` vai para a `main`. Depois da sua aprovação no environment `producao`, o `cdk deploy` roda o container que monta a layer e publica os zips no bucket do bootstrap. O runner `ubuntu-24.04-arm` já tem Docker, e a role `rango-github-deploy` não precisa de nada novo, porque as roles do bootstrap que ela assume fazem o trabalho. A stack inteira volta, com o banco do snapshot, a API no ECS e o front. Ressuscitar a produção virou rotina neste livro, e ela já nem reclama. No fim, as saídas ficam em variáveis:
 
 ```bash
 saida() {
@@ -534,7 +534,7 @@ https://k3x9q2w7ab.execute-api.us-east-1.amazonaws.com
 
 ### O primeiro cold start
 
-Chame a função de resumo à mão, com um período longo para pegar os pedidos que vieram do snapshot:
+A primeira chamada da função de resumo é feita à mão, com um período longo para pegar os pedidos que vieram do snapshot:
 
 ```bash
 aws lambda invoke \
@@ -561,17 +561,17 @@ REPORT RequestId: 8b1f0c2e-4d7a-4c55-9f0e-2a6b9d3c7e11	Duration: 812.45 ms	Bille
 {"restaurantes": 2, "horas": 720}
 ```
 
-Os seus números vão ser outros. Na linha `REPORT`, o `Init Duration` de 477 ms é a fase INIT: imports e busca do segredo. O `Duration` de 812 ms é a primeira chamada, quase toda gasta abrindo a conexão TLS com o Postgres. O `Billed Duration` soma as duas: é a cobrança do INIT na prática. Rode de novo:
+Os seus números vão ser outros. Na linha `REPORT`, o `Init Duration` de 477 ms é a fase INIT: imports e busca do segredo. O `Duration` de 812 ms é a primeira chamada, quase toda gasta abrindo a conexão TLS com o Postgres. O `Billed Duration` soma as duas: é a cobrança do INIT na prática. Numa segunda chamada, logo em seguida:
 
 ```text
 REPORT RequestId: 1c7e5a90-...	Duration: 38.12 ms	Billed Duration: 39 ms	Memory Size: 512 MB	Max Memory Used: 97 MB
 ```
 
-Sem `Init Duration`. O ambiente foi reaproveitado com a conexão aberta, e a chamada caiu de 1,3 segundo para 39 milissegundos. Para a rotina das 11h, tanto faz. Para uma API com usuário esperando, faz muita diferença.
+Sem `Init Duration`. O ambiente foi reaproveitado com a conexão aberta, e a chamada caiu de 1,3 segundo para 39 milissegundos. Para a rotina das 11h, tanto faz. Para uma API com usuário esperando, faz muita diferença. Um segundo e meio, para quem está com fome, dá tempo de abrir o aplicativo da concorrência.
 
 ### O webhook, assinado
 
-Crie um pedido pela API. O gateway simulado do capítulo 5 forma o código da cobrança com os oito primeiros caracteres da chave de idempotência:
+Primeiro, um pedido criado pela API. O gateway simulado do capítulo 5 forma o código da cobrança com os oito primeiros caracteres da chave de idempotência:
 
 ```bash
 CHAVE=$(uuidgen | tr 'A-Z' 'a-z')
@@ -582,7 +582,7 @@ PEDIDO=$(curl -s -X POST https://api.rango.com.br/pedidos \
 COBRANCA="cobranca-${CHAVE:0:8}"
 ```
 
-Agora faça o papel do gateway. Leia a chave do webhook, monte o aviso e assine:
+Agora o terminal faz o papel do gateway, numa pequena peça de teatro em que o `openssl` interpreta o gateway de pagamento: lê a chave do webhook, monta o aviso e assina:
 
 ```bash
 CHAVE_WEBHOOK=$(aws secretsmanager get-secret-value \
@@ -601,9 +601,9 @@ curl -s -X POST "$URL_WEBHOOKS/webhooks/pagamento" \
 {"pedido_id": "5f0d2c1a-9e3b-4b7f-8a61-0c4e2d9b7a35", "status": "pago"}
 ```
 
-A chave do webhook passou pela sua variável de ambiente local só para este teste. Ao terminar, rode `unset CHAVE_WEBHOOK`.
+A chave do webhook passou pela sua variável de ambiente local só para este teste. Ao terminar, um `unset CHAVE_WEBHOOK` a apaga.
 
-Confirme pela API, que lê o mesmo banco:
+A API, que lê o mesmo banco, confirma:
 
 ```bash
 curl -s https://api.rango.com.br/pedidos/$PEDIDO | jq .status
@@ -613,7 +613,7 @@ curl -s https://api.rango.com.br/pedidos/$PEDIDO | jq .status
 "pago"
 ```
 
-Agora mande o mesmo corpo com uma assinatura errada, trocando o último caractere:
+Agora, o mesmo corpo com uma assinatura errada, com o último caractere trocado:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL_WEBHOOKS/webhooks/pagamento" \
@@ -626,11 +626,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL_WEBHOOKS/webhooks/pagamen
 401
 ```
 
-E reenvie o aviso original, com a assinatura certa, como um gateway faria depois de um timeout. A resposta volta `200` com o mesmo `"status": "pago"`. O pedido continua igual.
+E quando o aviso original é reenviado, com a assinatura certa, como um gateway faria depois de um timeout, a resposta volta `200` com o mesmo `"status": "pago"`. O pedido continua igual. Idempotência é isso: apertar o botão do elevador dez vezes não faz o elevador chegar dez vezes mais rápido.
 
 ### Quanto isso custa
 
-Com os preços de referência de outubro de 2026 em us-east-1 (US$ 0,20 por milhão de chamadas e cerca de US$ 0,0000133 por GB-segundo em arm64; confira a página oficial), o resumo dá 90 execuções por mês de uns 2 segundos com 0,5 GB: 90 GB-segundos, menos de um centavo de dólar, contra os US$ 7 da task do ECS. Três mil webhooks por mês custam meio centavo na HTTP API. O que custa nesta arquitetura já existia antes: o banco e os endpoints da VPC.
+Com os preços de referência de outubro de 2026 em us-east-1 (US$ 0,20 por milhão de chamadas e cerca de US$ 0,0000133 por GB-segundo em arm64; confira a página oficial), o resumo dá 90 execuções por mês de uns 2 segundos com 0,5 GB: 90 GB-segundos, menos de um centavo de dólar, contra os US$ 7 da task do ECS. A diferença é tão grande que dá vontade de conferir a conta duas vezes, e eu conferi. Três mil webhooks por mês custam meio centavo na HTTP API. O que custa nesta arquitetura já existia antes: o banco e os endpoints da VPC.
 
 ### Desmontando
 
@@ -641,13 +641,13 @@ gh workflow disable ci.yaml
 gh workflow disable renovar-tasks.yaml
 ```
 
-A exclusão pode demorar vários minutos a mais, porque as interfaces de rede da Lambda na VPC são liberadas aos poucos e travam a exclusão do Security Group e das subnets. O segredo do webhook entra em exclusão agendada, e o banco deixa um snapshot novo para o próximo capítulo.
+A exclusão pode demorar vários minutos a mais, porque as interfaces de rede da Lambda na VPC são liberadas aos poucos e travam a exclusão do Security Group e das subnets. A Lambda sai da festa devagar, despedindo-se de cada convidado. O segredo do webhook entra em exclusão agendada, e o banco deixa um snapshot novo para o próximo capítulo.
 
 ## Quando serverless vale a pena, e quando não
 
-Depois do resumo a menos de um centavo, a tentação é levar a API inteira para a Lambda. O Lambda Web Adapter permite isso, rodando o FastAPI dentro da função sem mudar o código. Faça a conta antes.
+Depois do resumo a menos de um centavo, a tentação é levar a API inteira para a Lambda. É a fase de quem acabou de ganhar um martelo e passa a ver prego em tudo. O Lambda Web Adapter permite isso, rodando o FastAPI dentro da função sem mudar o código. Antes, a conta.
 
-A API do Rangô recebe tráfego o dia inteiro. Suponha uma média de 50 requisições por segundo, cada uma com 100 ms, numa função de 512 MB em arm64. Num mês de 30 dias, são cerca de 130 milhões de chamadas. A duração dá 6,5 milhões de GB-segundos, uns US$ 86. As chamadas da Lambda somam uns US$ 26. A HTTP API cobra mais uns US$ 130. Total: perto de US$ 240 por mês. As duas tasks do ECS que o capítulo 17 estimou custam uns US$ 29, e mesmo somando o ALB a conta fica abaixo de US$ 60. Os valores são aproximados, mas a ordem de grandeza não muda.
+A API do Rangô recebe tráfego o dia inteiro. Suponha uma média de 50 requisições por segundo, cada uma com 100 ms, numa função de 512 MB em arm64. Num mês de 30 dias, são cerca de 130 milhões de chamadas. A duração dá 6,5 milhões de GB-segundos, uns US$ 86. As chamadas da Lambda somam uns US$ 26. A HTTP API cobra mais uns US$ 130. Total: perto de US$ 240 por mês. As duas tasks do ECS que o capítulo 17 estimou custam uns US$ 29, e mesmo somando o ALB a conta fica abaixo de US$ 60. Os valores são aproximados, mas a ordem de grandeza não muda. Serverless para tráfego constante é como ir de táxi ao trabalho todos os dias: confortável e, no fim do mês, a explicação de por que tanta gente compra carro.
 
 O ECS cobra pela capacidade reservada, e um Uvicorn ocupado atende dezenas de requisições na mesma vCPU paga. A Lambda cobra por ambiente ocupado, inclusive o tempo esperando o banco responder. Com tráfego constante, você paga a conveniência em cada milissegundo.
 
@@ -660,21 +660,21 @@ Os critérios, para o Rangô e para quase todo projeto:
 - **Latência previsível** é difícil com cold starts, e a provisioned concurrency traz de volta a capacidade parada.
 - **Muitas conexões com banco relacional** são um problema. A Lambda escala para centenas de ambientes em segundos, e o Postgres não acompanha. O RDS Proxy, um PgBouncer gerenciado e cobrado à parte, existe para isso, e serviços sem conexão persistente, como S3, SQS e DynamoDB, combinam melhor com funções.
 
-O Rangô fica híbrido, como muita coisa em produção: a API e os workers do stream seguem no ECS, onde o tráfego é constante; o que roda de vez em quando ou reage a eventos externos vai para a Lambda.
+O Rangô fica híbrido, como muita coisa em produção, e como carro flex, que bebe o que estiver mais barato no posto: a API e os workers do stream seguem no ECS, onde o tráfego é constante; o que roda de vez em quando ou reage a eventos externos vai para a Lambda.
 
 ## Armadilhas e casos reais
 
 > **Armadilha:** Wheel do sistema errado. Quem instala as dependências da layer com um `pip install` simples num Mac ou num Linux x86 recebe binários que não rodam na Lambda arm64. O deploy funciona, e a primeira chamada falha com `Runtime.ImportModuleError: Unable to import module 'resumo_vendas': no pq wrapper available.` O `--platform` e o `--only-binary` do bundling existem para isso. Bibliotecas em Python puro não sofrem com o problema, por isso ele costuma aparecer só quando entra a primeira dependência com código compilado.
 
-> **Armadilha:** Timeout padrão de 3 segundos. Uma função criada sem `timeout` explícito morre em 3 segundos, e um cold start que busca segredo e abre conexão TLS com o banco pode passar disso. O log mostra `Task timed out after 3.00 seconds`, e a função funciona na segunda tentativa, já aquecida. Esse "falha só às vezes" costuma consumir uma tarde de investigação.
+> **Armadilha:** Timeout padrão de 3 segundos. Uma função criada sem `timeout` explícito morre em 3 segundos, e um cold start que busca segredo e abre conexão TLS com o banco pode passar disso. O log mostra `Task timed out after 3.00 seconds`, e a função funciona na segunda tentativa, já aquecida. Esse "falha só às vezes" costuma consumir uma tarde de investigação e um pedaço da sua fé na profissão.
 
 > **Armadilha:** Grupo de logs sem retenção. Sem o `log_group` explícito, a Lambda cria sozinha o grupo `/aws/lambda/nome-da-funcao` na primeira execução, com retenção infinita. O CloudFormation não sabe que ele existe, então o grupo sobrevive ao `cdk destroy` e cresce para sempre, cobrando armazenamento. Defina o grupo na stack, com retenção.
 
-> **Armadilha:** Laço recursivo. Uma função disparada por upload no S3 gera uma miniatura e grava no mesmo bucket. A gravação dispara a função de novo, que gera a miniatura da miniatura, e assim por diante, com a concorrência subindo até o limite da conta. A AWS hoje detecta e interrompe esse tipo de laço para algumas combinações de serviços, mas não conte com isso: grave a saída em outro bucket ou em outro prefixo, e filtre o gatilho pelo prefixo de entrada.
+> **Armadilha:** Laço recursivo. Uma função disparada por upload no S3 gera uma miniatura e grava no mesmo bucket. A gravação dispara a função de novo, que gera a miniatura da miniatura, e assim por diante, como dois espelhos frente a frente, com a concorrência subindo até o limite da conta. A AWS hoje detecta e interrompe esse tipo de laço para algumas combinações de serviços, mas não conte com isso: grave a saída em outro bucket ou em outro prefixo, e filtre o gatilho pelo prefixo de entrada.
 
 > **Armadilha:** Estado que vaza entre chamadas. Variáveis globais sobrevivem entre invocações, o que serve para conexões e, por engano, para dados de uma requisição. Num exemplo hipotético, uma função guarda o usuário autenticado numa global, a chamada seguinte de outro usuário falha antes de sobrescrever, e a resposta sai com os dados do primeiro. O que é da requisição fica dentro do `handler`, inclusive arquivos em `/tmp`.
 
-> **Armadilha:** Cron em UTC. Um `cron(0 11 * * ? *)` numa regra do EventBridge dispara às 8h em Brasília, antes de a cozinha abrir.
+> **Armadilha:** Cron em UTC. Um `cron(0 11 * * ? *)` numa regra do EventBridge dispara às 8h em Brasília, antes de a cozinha abrir, e o dono do restaurante lê o resumo de vendas ainda de pijama.
 
 > **Dica:** O `event` é só um dicionário. No pytest, chame o handler com um evento de exemplo no formato 2.0 e você cobre a maior parte dos testes sem ferramenta extra.
 
@@ -684,16 +684,16 @@ O Rangô fica híbrido, como muita coisa em produção: a API e os workers do st
 - Cada ambiente de execução passa por INIT uma vez, atende uma chamada por vez e fica congelado entre chamadas. Cold start é o INIT somado à primeira chamada; desde agosto de 2025, o INIT é cobrado.
 - Memória vai de 128 MB a 10.240 MB, com CPU proporcional (1.769 MB equivalem a uma vCPU). O teto de execução é de 15 minutos; o padrão de timeout, 3 segundos.
 - A concorrência padrão é de 1.000 ambientes por região, menor em contas novas. Reservar concorrência protege o banco e exige deixar 100 execuções livres na conta.
-- Layers levam dependências para `/opt/python`, no máximo cinco por função. Monte as wheels para a arquitetura certa.
+- Layers levam dependências para `/opt/python`, no máximo cinco por função. As wheels precisam ser montadas para a arquitetura certa.
 - O API Gateway transforma HTTP em evento. A HTTP API (US$ 1,00 por milhão) serve à maioria dos casos e corta integrações em 30 segundos; a REST API (US$ 3,50) traz chaves de API, validação, WAF, endpoints privados e cache.
 - O Rangô ganhou a `resumo-vendas`, disparada por três regras do EventBridge em UTC, e a `webhook-pagamento`, atrás de uma HTTP API, com assinatura HMAC e `UPDATE` idempotente. As duas rodam na VPC e falam com o RDS.
 - Serverless vale para trabalho intermitente e disparado por evento. Para tráfego constante, muitas conexões com banco relacional ou tarefas longas, containers saem mais baratos e mais previsíveis.
 
 ## Entregadores a cada cinco segundos
 
-Com o PIX funcionando, o Bruno volta com a próxima ideia, e essa ele chama de prioridade da empresa: o cliente quer ver o entregador no mapa, em tempo real. O aplicativo do entregador manda a posição a cada cinco segundos, e o React do cliente pergunta "onde está meu pedido?" com a mesma frequência.
+Com o PIX funcionando, o Bruno volta com a próxima ideia, e essa ele chama de prioridade da empresa, categoria em que, curiosamente, cabem todos os pedidos do Bruno: o cliente quer ver o entregador no mapa, em tempo real. O aplicativo do entregador manda a posição a cada cinco segundos, e o React do cliente pergunta "onde está meu pedido?" com a mesma frequência.
 
-Com 200 entregadores no jantar, são 40 gravações por segundo só de posição, mais as leituras dos clientes esperando. Cada posição vira uma linha numa tabela que cresce milhões de linhas por semana e que ninguém consulta depois de uma hora. Coloque isso no `db.t4g.micro` dos pedidos, que mal aguentou seis instâncias no capítulo 13, com Lambdas na frente, cada uma com a sua conexão. O Postgres passa o jantar gravando coordenadas que vão para o lixo em seguida.
+Com 200 entregadores no jantar, são 40 gravações por segundo só de posição, mais as leituras dos clientes esperando. Cada posição vira uma linha numa tabela que cresce milhões de linhas por semana e que ninguém consulta depois de uma hora. Agora imagine isso no `db.t4g.micro` dos pedidos, que mal aguentou seis instâncias no capítulo 13, com Lambdas na frente, cada uma com a sua conexão. O Postgres passa o jantar gravando coordenadas que vão para o lixo em seguida, como um escrivão de cartório anotando a posição de cada formiga do quintal.
 
 O próximo capítulo apresenta o Amazon DynamoDB, um banco acessado por HTTP, sem conexão persistente, que aguenta milhares de gravações por segundo e apaga sozinho o que expirou. Ele obriga você a desenhar as tabelas começando pelas perguntas que a aplicação vai fazer. E o capítulo mostra também quando ele é a escolha errada.
 

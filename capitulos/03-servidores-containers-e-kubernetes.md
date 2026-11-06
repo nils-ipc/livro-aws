@@ -4,7 +4,7 @@ No capítulo anterior, você viu como o DNS transforma `rango.com.br` num IP e c
 
 ## Sexta-feira, 19h, primeiro deploy
 
-Você decide que chegou a hora. Aluga um servidor Linux num provedor qualquer (a AWS fica para a Parte II), recebe um IP público, `203.0.113.45`, e um usuário com acesso por SSH. Entra na máquina, clona o repositório e repete o que sempre fez no notebook:
+Você decide que chegou a hora. Sexta-feira às 19h é, reconhecidamente, o horário oficial das más decisões em TI, mas ninguém tinha avisado você. Aluga um servidor Linux num provedor qualquer (a AWS fica para a Parte II), recebe um IP público, `203.0.113.45`, e um usuário com acesso por SSH. Entra na máquina, clona o repositório e repete o que sempre fez no notebook:
 
 ```bash
 git clone https://github.com/seu-usuario/rango.git
@@ -21,7 +21,7 @@ O Uvicorn sobe sem reclamar. Você abre `http://203.0.113.45:8000/health` no nav
 Internal Server Error
 ```
 
-No notebook, essa mesma rota funciona há uma semana. Na semana passada, a sua sócia pediu que a taxa de entrega aparecesse já formatada em reais, e você resolveu do jeito mais rápido, usando o módulo `locale` da biblioteca padrão:
+Três palavras capazes de estragar um fim de semana inteiro. No notebook, essa mesma rota funciona há uma semana. Na semana passada, a sua sócia pediu que a taxa de entrega aparecesse já formatada em reais, e você resolveu do jeito mais rápido (que, como todo mundo aprende cedo ou tarde, costuma ser o que mais demora), usando o módulo `locale` da biblioteca padrão:
 
 ```python
 # backend/app/main.py
@@ -72,39 +72,39 @@ locale.Error: unsupported locale setting
 
 O seu notebook tem o locale `pt_BR.UTF-8` instalado porque o sistema dele está em português. O servidor veio com uma instalação mínima, em inglês, e ninguém instalou esse locale. O código Python é idêntico nas duas máquinas. O que mudou foi tudo ao redor dele.
 
-E há mais. O `pip install` baixou versões mais novas das bibliotecas, porque você nunca fixou versões. A variável `CORS_ORIGINS` não existe no servidor. E, quando você fecha o terminal para ir jantar, o Uvicorn morre junto com a sessão SSH.
+E há mais. O `pip install` baixou versões mais novas das bibliotecas, porque você nunca fixou versões. A variável `CORS_ORIGINS` não existe no servidor. E, quando você fecha o terminal para ir jantar, o Uvicorn morre junto com a sessão SSH. Solidário, ele também encerra o expediente.
 
 "Na minha máquina funciona" tem um sentido bem literal: a aplicação depende de muita coisa que não está no repositório. Versão do Python, bibliotecas do sistema, locale, variáveis de ambiente, até o processo que mantém o programa rodando. Vamos primeiro entender o que existe num servidor e, depois, empacotar o ambiente junto com o código.
 
 ## O que é um servidor, afinal
 
-Servidor é um computador cuja função é atender requisições de outros computadores. Fisicamente, lembra o seu notebook. A diferença está no uso: ele fica num data center, ligado o tempo todo, com energia redundante e um link de rede rápido, e ninguém se senta na frente dele.
+Servidor é um computador cuja função é atender requisições de outros computadores. Fisicamente, lembra o seu notebook. A diferença está no uso: ele fica num data center, ligado o tempo todo, com energia redundante e um link de rede rápido, e ninguém se senta na frente dele. Em compensação, ninguém derruba café no teclado dele.
 
-Ter um servidor já significou comprar uma máquina física e instalá-la num rack. Isso ainda existe (o chamado *bare metal*), mas hoje a maior parte das aplicações roda em **máquinas virtuais**.
+Ter um servidor já significou comprar uma máquina física e instalá-la num rack, de preferência descobrindo, na hora de parafusar, que o trilho que veio na caixa era de outro modelo. Isso ainda existe (o chamado *bare metal*), mas hoje a maior parte das aplicações roda em **máquinas virtuais**.
 
 ### Máquinas virtuais
 
 Uma máquina virtual (VM) é um computador simulado em software, rodando dentro de um computador físico. Um programa chamado **hypervisor** divide os recursos da máquina física entre várias VMs: cada uma recebe uma fatia de CPU, de memória e de disco, e enxerga um hardware virtual como se fosse só dela. Cada VM roda o seu próprio sistema operacional completo, com o seu próprio kernel.
 
-Se você já usou o VirtualBox, já usou uma VM. Os provedores de nuvem fazem o mesmo em escala industrial: um servidor físico com dezenas de núcleos é fatiado em VMs alugadas para clientes diferentes. Quando você "aluga um servidor" de 2 vCPUs e 4 GB, recebe uma dessas fatias. Ela nasce em minutos, pode ser destruída quando não servir mais, e o hypervisor impede que um cliente enxergue a memória do outro. No capítulo 9, você vai criar exatamente uma VM dessas na AWS, chamada instância EC2.
+Se você já usou o VirtualBox, já usou uma VM, talvez para instalar um Linux "só para ver como é" e nunca mais abrir. Os provedores de nuvem fazem o mesmo em escala industrial: um servidor físico com dezenas de núcleos é fatiado em VMs alugadas para clientes diferentes. Quando você "aluga um servidor" de 2 vCPUs e 4 GB, recebe uma dessas fatias. Ela nasce em minutos, pode ser destruída quando não servir mais, e o hypervisor impede que um cliente enxergue a memória do outro. É um prédio de apartamentos em que as paredes, felizmente, são bem mais grossas que as do seu. No capítulo 9, você vai criar exatamente uma VM dessas na AWS, chamada instância EC2.
 
 ## O mínimo de Linux para rodar uma aplicação
 
-Quase todo servidor web roda Linux. Você não precisa virar administrador de sistemas, mas precisa conhecer algumas peças para entender o que deu errado na sexta-feira à noite.
+Quase todo servidor web roda Linux. Você não precisa virar administrador de sistemas, nem decorar as opções do `tar`, façanha que, segundo a lenda, ninguém alcançou até hoje. Mas precisa conhecer algumas peças para entender o que deu errado na sexta-feira à noite.
 
 ### Distribuições, pacotes e onde as coisas ficam
 
-O Linux propriamente dito é só o kernel: a parte que conversa com o hardware, gerencia memória, processos e rede. O que você instala é uma **distribuição**, que junta o kernel com ferramentas, bibliotecas e um gerenciador de pacotes. Ubuntu e Debian usam `apt`. Amazon Linux e Red Hat usam `dnf`. O papel do gerenciador de pacotes é parecido com o do `pip`, só que para o sistema inteiro: `sudo apt install nginx` instala o Nginx e tudo de que ele depende.
+O Linux propriamente dito é só o kernel: a parte que conversa com o hardware, gerencia memória, processos e rede. (Neste exato momento, algum leitor já começou a escrever um e-mail para explicar que o certo é dizer GNU/Linux.) O que você instala é uma **distribuição**, que junta o kernel com ferramentas, bibliotecas e um gerenciador de pacotes. Ubuntu e Debian usam `apt`. Amazon Linux e Red Hat usam `dnf`. O papel do gerenciador de pacotes é parecido com o do `pip`, só que para o sistema inteiro: `sudo apt install nginx` instala o Nginx e tudo de que ele depende.
 
 Isso já explica parte do problema. O Ubuntu 24.04 traz o Python 3.12; o Ubuntu 22.04 traz o 3.10. Locales e bibliotecas em C usadas por pacotes Python também variam de uma instalação para outra.
 
-Os diretórios seguem uma convenção: configuração em `/etc`, logs em `/var/log`, programas instalados à mão em `/opt` ou `/srv`, pastas dos usuários em `/home`.
+Os diretórios seguem uma convenção: configuração em `/etc`, logs em `/var/log`, programas instalados à mão em `/opt` ou `/srv`, pastas dos usuários em `/home`. E o `/tmp`, para arquivos temporários, que é para onde vai tudo o que alguém jurou que apagaria depois.
 
 ### Usuários e permissões
 
 No Linux, todo arquivo e todo processo pertencem a um usuário. O usuário `root` pode tudo: apagar qualquer arquivo, abrir qualquer porta, matar qualquer processo. O comando `sudo` executa um comando com os poderes do `root`.
 
-Lembra das portas privilegiadas do capítulo 1, abaixo de 1024? No Linux, só o `root` (ou um processo com uma permissão específica, a `CAP_NET_BIND_SERVICE`) pode escutar nelas. As portas 80 e 443 estão nessa faixa. A saída preguiçosa seria rodar o Uvicorn como `root`. Só que aí qualquer falha na sua aplicação, qualquer dependência comprometida, roda com permissão para fazer qualquer coisa na máquina. A regra é a mesma do código: cada parte com o mínimo de permissão de que precisa. A aplicação roda com um usuário próprio, sem privilégios, numa porta alta como a 8000. Daqui a pouco você vai ver quem fica na porta 443.
+Lembra das portas privilegiadas do capítulo 1, abaixo de 1024? No Linux, só o `root` (ou um processo com uma permissão específica, a `CAP_NET_BIND_SERVICE`) pode escutar nelas. As portas 80 e 443 estão nessa faixa. A saída preguiçosa seria rodar o Uvicorn como `root`. É uma saída bem popular: a frase "roda com sudo que funciona" já resolveu e causou mais problemas do que qualquer outra na história do Linux. Só que aí qualquer falha na sua aplicação, qualquer dependência comprometida, roda com permissão para fazer qualquer coisa na máquina. A regra é a mesma do código: cada parte com o mínimo de permissão de que precisa. A aplicação roda com um usuário próprio, sem privilégios, numa porta alta como a 8000. Daqui a pouco você vai ver quem fica na porta 443.
 
 ### Processos e sinais
 
@@ -117,13 +117,13 @@ Cada programa em execução é um **processo**, identificado por um número, o P
 | `SIGHUP` | O terminal que controlava o processo foi fechado | Por padrão, o processo morre. |
 | `SIGINT` | Você apertou Ctrl+C | Parecido com o `SIGTERM`. |
 
-O `SIGHUP` explica por que o Uvicorn morreu quando você fechou o SSH: o processo estava preso ao seu terminal. Dá para contornar com `nohup` ou `tmux`, mas, se o processo cair às 3h ou a máquina reiniciar, ninguém sobe o Uvicorn de novo.
+O `SIGTERM` é um pedido educado para sair; o `SIGKILL` é a versão digital de puxar a cadeira de alguém. O `SIGHUP` explica por que o Uvicorn morreu quando você fechou o SSH: o processo estava preso ao seu terminal. O nome vem de *hang up*, "desligar o telefone", do tempo em que terminais se conectavam por linha telefônica e a ligação caindo levava os programas junto. Dá para contornar com `nohup` ou `tmux`, mas, se o processo cair às 3h ou a máquina reiniciar, ninguém sobe o Uvicorn de novo.
 
 ### Serviços com systemd
 
-Quem resolve isso é o gerenciador de serviços. Na maioria das distribuições atuais, ele se chama **systemd**: o primeiro processo a subir quando a máquina liga (o PID 1), que inicia, para, reinicia e registra os logs dos outros serviços.
+Quem resolve isso é o gerenciador de serviços. Na maioria das distribuições atuais, ele se chama **systemd**: o primeiro processo a subir quando a máquina liga (o PID 1), que inicia, para, reinicia e registra os logs dos outros serviços. Ele também é, ao lado da eterna briga entre Vim e Emacs, um dos assuntos que mais rendem discussões acaloradas em fóruns de Linux.
 
-Você descreve o serviço num arquivo de unidade. Para o Rangô, ficaria assim:
+O serviço é descrito num arquivo de unidade. Para o Rangô, ficaria assim:
 
 ```ini
 # /etc/systemd/system/rango-api.service
@@ -144,9 +144,9 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-O serviço roda com o usuário `rango`, sem privilégios. As variáveis de ambiente vêm de `/etc/rango/api.env`, fora do repositório. O Uvicorn escuta só em `127.0.0.1`, então ninguém de fora acessa a porta 8000. E `Restart=on-failure` sobe o processo de novo se ele cair.
+O serviço roda com o usuário `rango`, sem privilégios. As variáveis de ambiente vêm de `/etc/rango/api.env`, fora do repositório. O Uvicorn escuta só em `127.0.0.1`, então ninguém de fora acessa a porta 8000. E `Restart=on-failure` sobe o processo de novo se ele cair. Persistente assim, só corretor de imóveis com o seu número de telefone.
 
-Para ativar:
+A ativação fica assim:
 
 ```bash
 sudo systemctl daemon-reload
@@ -161,7 +161,7 @@ O `enable` faz o serviço subir junto com a máquina; o `--now` já o inicia; o 
 
 Sobrou uma pergunta da ponte do capítulo 2: se o Uvicorn roda sem privilégios na porta 8000, quem atende na 443, com o certificado?
 
-A resposta padrão é um **proxy reverso**. É um servidor que fica na frente da aplicação, recebe as conexões da internet e repassa cada requisição para o processo certo lá atrás. O mais usado é o **Nginx**. Na mesma máquina, o desenho fica assim:
+A resposta padrão é um **proxy reverso**. É um servidor que fica na frente da aplicação, recebe as conexões da internet e repassa cada requisição para o processo certo lá atrás. O mais usado é o **Nginx**, que se pronuncia "engine-x", embora muita gente diga "en-ginx" com uma convicção admirável. Na mesma máquina, o desenho fica assim:
 
 ```text
 Internet
@@ -178,9 +178,9 @@ Internet
 Uvicorn (usuário rango, porta 8000)
 ```
 
-Em termos de FastAPI, o proxy reverso lembra um middleware que roda antes da sua aplicação, só que num processo separado. Ele termina o TLS, então o certificado fica com o Nginx e o Uvicorn recebe HTTP simples pela interface local. Roteia pelo cabeçalho `Host` do capítulo 2: `rango.com.br` serve os arquivos estáticos do build do React direto do disco, `api.rango.com.br` vai para o Uvicorn. E protege a aplicação de clientes lentos: um celular com sinal ruim pode levar segundos para enviar a requisição, e o Nginx recebe tudo antes de repassar, sem prender um worker do Uvicorn.
+Em termos de FastAPI, o proxy reverso lembra um middleware que roda antes da sua aplicação, só que num processo separado. Ele termina o TLS, então o certificado fica com o Nginx e o Uvicorn recebe HTTP simples pela interface local. Roteia pelo cabeçalho `Host` do capítulo 2: `rango.com.br` serve os arquivos estáticos do build do React direto do disco, `api.rango.com.br` vai para o Uvicorn. E protege a aplicação de clientes lentos: um celular com sinal ruim (aquela barrinha solitária dentro do elevador) pode levar segundos para enviar a requisição, e o Nginx recebe tudo antes de repassar, sem prender um worker do Uvicorn. É a recepcionista que ouve a história inteira do cliente antes de incomodar o médico.
 
-E a porta privilegiada? O processo principal do Nginx começa como `root`, abre as portas 80 e 443 e cria processos de trabalho que rodam como um usuário sem privilégios (`www-data`, no Ubuntu). Quem processa as requisições nunca tem poderes de administrador.
+E a porta privilegiada? O processo principal do Nginx começa como `root`, abre as portas 80 e 443 e cria processos de trabalho que rodam como um usuário sem privilégios (`www-data`, no Ubuntu). Quem processa as requisições nunca tem poderes de administrador. O dono abre a loja de manhã e vai embora; quem atende no balcão não tem a chave do cofre.
 
 A configuração para o Rangô num servidor de verdade seria algo assim:
 
@@ -227,13 +227,13 @@ Falta a pergunta mais difícil.
 
 ## Voltando ao "na minha máquina funciona"
 
-O systemd e o Nginx resolvem como a aplicação roda, e não o que ela encontra quando roda. O erro de locale continua lá. Você poderia instalar o locale no servidor e anotar isso num README. Poderia fixar as bibliotecas com `pip freeze`, o que ajuda. Mas o Python, as bibliotecas do sistema e os locales continuam dependendo de quem configurou cada máquina: o seu Mac, o Windows do colega novo, o servidor do CI, o de produção. Com o tempo, elas se afastam umas das outras.
+O systemd e o Nginx resolvem como a aplicação roda, e não o que ela encontra quando roda. O erro de locale continua lá. Você poderia instalar o locale no servidor e anotar isso num README, aquele arquivo que todo mundo escreve com carinho e ninguém lê. Poderia fixar as bibliotecas com `pip freeze`, o que ajuda. Mas o Python, as bibliotecas do sistema e os locales continuam dependendo de quem configurou cada máquina: o seu Mac, o Windows do colega novo, o servidor do CI, o de produção. Com o tempo, elas se afastam umas das outras.
 
-A saída é entregar o código já dentro do ambiente, em vez de entregar o código e uma lista de instruções. Um pacote com o Python na versão certa, as bibliotecas do sistema, as dependências fixadas e a sua aplicação. Esse pacote é uma **imagem de container**.
+A saída é entregar o código já dentro do ambiente, em vez de entregar o código e uma lista de instruções. Um pacote com o Python na versão certa, as bibliotecas do sistema, as dependências fixadas e a sua aplicação. Esse pacote é uma **imagem de container**. É a diferença entre mandar a receita do bolo e mandar o bolo.
 
 ## Containers
 
-Um **container** é um processo comum do Linux que roda isolado do resto da máquina. Ele enxerga o próprio sistema de arquivos, a própria árvore de processos, a própria interface de rede e o próprio `localhost`. Do lado de dentro, parece que ele está sozinho num computador. Do lado de fora, é só mais um processo na lista do `ps`.
+Um **container** é um processo comum do Linux que roda isolado do resto da máquina. Ele enxerga o próprio sistema de arquivos, a própria árvore de processos, a própria interface de rede e o próprio `localhost`. Do lado de dentro, parece que ele está sozinho num computador. Do lado de fora, é só mais um processo na lista do `ps`. É um processo com síndrome de protagonista.
 
 Esse isolamento vem de dois recursos do kernel do Linux:
 
@@ -257,9 +257,9 @@ A diferença para uma VM está no kernel. Cada VM roda um sistema operacional co
 └─────────────────────┘          └─────────────────────┘
 ```
 
-Sem kernel próprio, um container sobe em fração de segundo e ocupa megabytes, enquanto uma VM leva de segundos a minutos e ocupa gigabytes. O preço é um isolamento mais fraco: uma falha grave no kernel afeta todos os containers da máquina. Na nuvem, o normal é usar os dois juntos, com containers dentro de VMs.
+Sem kernel próprio, um container sobe em fração de segundo e ocupa megabytes, enquanto uma VM leva de segundos a minutos e ocupa gigabytes. O preço é um isolamento mais fraco: uma falha grave no kernel afeta todos os containers da máquina. VMs são casas geminadas, cada uma com a sua fundação; containers são quartos numa república, dividindo a mesma cozinha e o mesmo encanamento. Na nuvem, o normal é usar os dois juntos, com containers dentro de VMs.
 
-E no seu Mac ou no Windows, que não usam o kernel do Linux? O Docker Desktop cria uma VM Linux pequena e roda os containers dentro dela. Você não vê essa VM, mas ela está lá.
+E no seu Mac ou no Windows, que não usam o kernel do Linux? O Docker Desktop cria uma VM Linux pequena e roda os containers dentro dela. Você não vê essa VM, mas ela está lá, e a ventoinha do notebook faz questão de lembrar.
 
 ### Imagem, container e registry
 
@@ -269,17 +269,17 @@ Uma **imagem** é o pacote: um sistema de arquivos com tudo de que a aplicação
 
 A imagem é montada em **camadas**. Cada instrução do arquivo de construção gera uma camada com as mudanças em relação à anterior, mais ou menos como cada commit no git guarda uma diferença em relação ao commit pai. Camadas iguais são reaproveitadas entre imagens e entre builds, o que deixa a construção rápida quando só o seu código muda.
 
-Um **registry** é um repositório de imagens, como o PyPI é para pacotes Python. O Docker Hub é o mais conhecido; dele vem a imagem oficial `python`. Você constrói a imagem uma vez, envia com `docker push`, e qualquer servidor baixa a mesma imagem com `docker pull`. Na AWS, o registry se chama Amazon ECR, e ele aparece no capítulo 17.
+Um **registry** é um repositório de imagens, como o PyPI é para pacotes Python. O Docker Hub é o mais conhecido; dele vem a imagem oficial `python`. Você constrói a imagem uma vez, envia com `docker push`, e qualquer servidor baixa a mesma imagem com `docker pull`. É o "write once, run anywhere" que o Java prometeu nos anos 1990, agora entregue por uma baleia. Na AWS, o registry se chama Amazon ECR, e ele aparece no capítulo 17.
 
-O formato das imagens é padronizado pela OCI (*Open Container Initiative*), então Docker, Podman e containerd rodam as mesmas imagens.
+O formato das imagens é padronizado pela OCI (*Open Container Initiative*), então Docker, Podman e containerd rodam as mesmas imagens. Padrão aberto é isso: as empresas brigam por todo o resto, mas concordam no formato da caixa.
 
-## Mão na massa: o Rangô num container
+## Na prática: o Rangô num container
 
-Pré-requisitos: Docker instalado (Docker Desktop no macOS e no Windows, ou Docker Engine no Linux) com o plugin Compose, que traz o comando `docker compose`. Confira com `docker version` e `docker compose version`.
+Os pré-requisitos são o Docker instalado (Docker Desktop no macOS e no Windows, ou Docker Engine no Linux) com o plugin Compose, que traz o comando `docker compose`. Os comandos `docker version` e `docker compose version` confirmam a instalação.
 
 ### Fixando as dependências
 
-Antes de tudo, congele as versões que funcionam no seu notebook:
+O primeiro passo congela as versões que funcionam no notebook. É o tipo de congelamento que dá certo, ao contrário do congelamento de preços do Plano Cruzado:
 
 ```bash
 cd backend
@@ -322,7 +322,7 @@ Linha a linha:
 4. `useradd` e `USER rango` fazem a aplicação rodar sem ser `root` dentro do container, pelo mesmo motivo do systemd.
 5. `CMD` define o comando de inicialização. O `--host 0.0.0.0` é obrigatório aqui, e o capítulo 1 explica por quê: o container tem o próprio `localhost`. Se o Uvicorn escutar em `127.0.0.1`, só o próprio container consegue falar com ele.
 
-Crie também um `backend/.dockerignore`, que funciona como um `.gitignore` para o build:
+O projeto ganha também um `backend/.dockerignore`, que funciona como um `.gitignore` para o build:
 
 ```text
 .venv
@@ -330,7 +330,7 @@ __pycache__
 .env
 ```
 
-Sem ele, o Docker enviaria a sua `.venv` inteira para o build, e um `.env` com segredos poderia acabar dentro da imagem.
+Sem ele, o Docker enviaria a sua `.venv` inteira para o build (e toda `.venv` que se preze pesa mais do que o projeto), e um `.env` com segredos poderia acabar dentro da imagem.
 
 ### Construindo e rodando
 
@@ -341,9 +341,9 @@ docker run --rm -p 127.0.0.1:8000:8000 \
   rango-api:0.1.0
 ```
 
-O `-t` dá nome e versão à imagem. No `docker run`, o `-p 127.0.0.1:8000:8000` liga a porta 8000 do seu notebook à porta 8000 do container, aceitando conexões só da sua máquina (lembra da armadilha do capítulo 1, do Docker furando o firewall? Este é o jeito de evitá-la). O `-e` passa a variável de ambiente, e o `--rm` apaga o container quando ele parar.
+O `-t` dá nome e versão à imagem. No `docker run`, o `-p 127.0.0.1:8000:8000` liga a porta 8000 do seu notebook à porta 8000 do container, aceitando conexões só da sua máquina (lembra da armadilha do capítulo 1, do Docker furando o firewall? Este é o jeito de evitá-la). O `-e` passa a variável de ambiente, e o `--rm` apaga o container quando ele parar. Sem ele, containers parados vão se acumulando em silêncio, como potes de plástico sem tampa no armário da cozinha.
 
-Em outro terminal:
+Em outro terminal, duas chamadas:
 
 ```bash
 curl http://localhost:8000/health
@@ -359,7 +359,7 @@ O `/health` responde `{"status":"ok"}`. O `/restaurantes` devolve `Internal Serv
 locale.Error: unsupported locale setting
 ```
 
-Este é o momento mais importante do capítulo. O erro que só acontecia no servidor agora acontece no seu notebook. A imagem `python:3.12-slim` não traz o locale `pt_BR`, assim como o servidor de sexta-feira. Só que agora o ambiente é o mesmo em todo lugar, então o bug aparece onde você desenvolve, e não em produção às 19h.
+Este é o momento mais importante do capítulo. Se você sentiu vontade de comemorar um erro 500, seja bem-vindo ao DevOps. O erro que só acontecia no servidor agora acontece no seu notebook. A imagem `python:3.12-slim` não traz o locale `pt_BR`, assim como o servidor de sexta-feira. Só que agora o ambiente é o mesmo em todo lugar, então o bug aparece onde você desenvolve, e não em produção às 19h.
 
 ### Corrigindo o bug de verdade
 
@@ -380,7 +380,7 @@ def listar_restaurantes():
     ]
 ```
 
-Reconstrua com uma versão nova e rode de novo:
+É a velha dança de trocar vírgula por ponto e ponto por vírgula, a mesma que todo programador brasileiro já fez pelo menos uma vez, normalmente depois de uma planilha importada com valores multiplicados por mil. A imagem é reconstruída com uma versão nova e roda de novo:
 
 ```bash
 docker build -t rango-api:0.1.1 .
@@ -401,9 +401,9 @@ curl http://localhost:8000/restaurantes
 
 ### API e proxy reverso juntos com Docker Compose
 
-Rodar um container com um `docker run` comprido é aceitável. Rodar dois, com rede entre eles, pede o **Docker Compose**: um arquivo YAML que descreve vários containers e como eles se ligam. Vamos colocar um Nginx na frente da API, do mesmo jeito que faríamos num servidor, usando o certificado do `mkcert` que você criou no capítulo 2.
+Rodar um container com um `docker run` comprido é aceitável. Rodar dois, com rede entre eles, pede o **Docker Compose**: um arquivo YAML que descreve vários containers e como eles se ligam. YAML é aquele formato em que um espaço a mais na indentação muda o significado do arquivo e ninguém na sala consegue enxergar a diferença. Vamos colocar um Nginx na frente da API, do mesmo jeito que faríamos num servidor, usando o certificado do `mkcert` gerado no capítulo 2.
 
-Crie `nginx/rango.conf` na raiz do projeto:
+A configuração do Nginx fica em `nginx/rango.conf`, na raiz do projeto:
 
 ```nginx
 # nginx/rango.conf
@@ -422,7 +422,7 @@ server {
 }
 ```
 
-E `compose.yaml`, também na raiz:
+E o `compose.yaml`, também na raiz:
 
 ```yaml
 # compose.yaml
@@ -448,7 +448,7 @@ services:
 
 O serviço `api` não publica nenhuma porta: só o Nginx fala com o Uvicorn. O Compose cria uma rede interna em que cada serviço é encontrado pelo nome, por isso o `proxy_pass` aponta para `http://api:8000`. Os certificados entram como volume somente leitura (`:ro`), fora da imagem. E `restart: unless-stopped` faz o papel do `Restart=on-failure` do systemd.
 
-Se o Uvicorn da API ainda estiver rodando com `--ssl-keyfile` do capítulo anterior, ou o container do teste anterior estiver ativo, pare-os. Depois:
+Se o Uvicorn da API ainda estiver rodando com `--ssl-keyfile` do capítulo anterior, ou o container do teste anterior estiver ativo, os dois precisam ser parados antes. Depois:
 
 ```bash
 docker compose up -d
@@ -456,7 +456,7 @@ docker compose ps
 curl --cacert "$(mkcert -CAROOT)/rootCA.pem" https://api.rango.test:8443/restaurantes
 ```
 
-O `--cacert` diz ao `curl` para confiar na CA local do `mkcert`, já que nem todo `curl` consulta o mesmo repositório de certificados que o navegador. A resposta é a mesma lista de antes, agora passando pelo Nginx com TLS. Para ver os logs dos dois serviços juntos, use `docker compose logs -f`.
+O `--cacert` diz ao `curl` para confiar na CA local do `mkcert`, já que nem todo `curl` consulta o mesmo repositório de certificados que o navegador. A resposta é a mesma lista de antes, agora passando pelo Nginx com TLS. Os logs dos dois serviços juntos aparecem com `docker compose logs -f`.
 
 Falta avisar o front. Em `frontend/.env.local`:
 
@@ -464,7 +464,7 @@ Falta avisar o front. Em `frontend/.env.local`:
 VITE_API_URL=https://api.rango.test:8443
 ```
 
-Reinicie o `npm run dev` e abra `https://rango.test:5173`. O React busca os restaurantes pelo Nginx, com o cadeado no lugar. O Uvicorn deixou de cuidar do TLS: o certificado agora mora no proxy, como vai morar em produção.
+Depois de reiniciar o `npm run dev`, o endereço `https://rango.test:5173` mostra o React buscando os restaurantes pelo Nginx, com o cadeado no lugar. O Uvicorn deixou de cuidar do TLS e, como todo funcionário que perde uma responsabilidade, fingiu que não se importou: o certificado agora mora no proxy, como vai morar em produção.
 
 ## Quando um servidor vira dez: orquestração
 
@@ -475,38 +475,38 @@ Com o Compose, o Rangô roda igual em qualquer máquina que tenha Docker. Agora 
 - Como trocar a versão 0.1.1 pela 0.1.2 sem tirar o Rangô do ar?
 - Como o Nginx sabe os endereços dos containers da API, se eles mudam a cada recriação?
 
-Responder isso com scripts e SSH é possível, e é um caminho garantido para incidentes. Um **orquestrador** de containers é o sistema que assume essas decisões. Você não diz a ele "rode este container naquele servidor"; você diz "quero três cópias da API na versão 0.1.1, cada uma com 128 MB de memória", e ele trabalha continuamente para que a realidade fique igual ao que você pediu.
+Responder isso com scripts e SSH é possível, e é um caminho garantido para incidentes. Quem já fez isso costuma contar a história em voz baixa, olhando para o chão. Um **orquestrador** de containers é o sistema que assume essas decisões. Você não diz a ele "rode este container naquele servidor"; você diz "quero três cópias da API na versão 0.1.1, cada uma com 128 MB de memória", e ele trabalha continuamente para que a realidade fique igual ao que você pediu.
 
 Se essa ideia lembrou o React, a comparação é boa. No React, você não manipula o DOM: você declara como a tela deve ficar a partir do estado, e o React calcula as diferenças e aplica as mudanças. Um orquestrador faz isso com infraestrutura. Você declara o **estado desejado**, ele observa o **estado atual** e age para aproximar um do outro. Esse ciclo se chama **reconciliação**, e ele nunca para: se um container morrer às 3h, o estado atual fica com duas cópias, o desejado continua pedindo três, e o orquestrador cria outra.
 
-O orquestrador mais usado no mercado é o **Kubernetes**, abreviado como K8s. Ele nasceu no Google, inspirado no sistema interno que a empresa usava para rodar os próprios serviços, e hoje é mantido pela Cloud Native Computing Foundation.
+O orquestrador mais usado no mercado é o **Kubernetes**, abreviado como K8s (o 8 conta as oito letras entre o K e o s, porque programador abrevia até quando a economia é de sete caracteres). O nome vem do grego e quer dizer timoneiro, quem pilota o navio, o que explica o leme no logotipo. Ele nasceu no Google, inspirado no sistema interno que a empresa usava para rodar os próprios serviços, e hoje é mantido pela Cloud Native Computing Foundation.
 
 ## Kubernetes em quatro conceitos
 
 O Kubernetes tem dezenas de tipos de objeto. Para entender como ele funciona, quatro bastam por enquanto.
 
-Um **cluster** é o conjunto de máquinas gerenciadas pelo Kubernetes. As máquinas que rodam os seus containers são os **nós** (*nodes*). Um grupo separado de componentes, a **control plane**, guarda o estado desejado, decide onde cada coisa roda e executa os ciclos de reconciliação. Você fala com a control plane pela linha de comando, o `kubectl`, enviando arquivos YAML.
+Um **cluster** é o conjunto de máquinas gerenciadas pelo Kubernetes. As máquinas que rodam os seus containers são os **nós** (*nodes*). Um grupo separado de componentes, a **control plane**, guarda o estado desejado, decide onde cada coisa roda e executa os ciclos de reconciliação. Você fala com a control plane pela linha de comando, o `kubectl`, enviando arquivos YAML. A pronúncia de `kubectl` ("kube-control", "kube-c-t-l", "kube-cuddle") é tema de um debate que a comunidade nunca encerrou, e provavelmente nunca vai encerrar.
 
-Um **pod** é a menor unidade que o Kubernetes executa. Em geral, um pod contém um container, mas pode conter alguns que precisam ficar juntos e compartilhar rede e disco. Cada pod recebe um IP próprio dentro do cluster. Pods são descartáveis: o Kubernetes os mata e os recria o tempo todo, em outros nós e com outros IPs. Você quase nunca cria um pod diretamente.
+Um **pod** é a menor unidade que o Kubernetes executa. Em geral, um pod contém um container, mas pode conter alguns que precisam ficar juntos e compartilhar rede e disco. O nome vem de *pod of whales*, um grupo de baleias, numa homenagem à baleia do logotipo do Docker. Cada pod recebe um IP próprio dentro do cluster. Pods são descartáveis: o Kubernetes os mata e os recria o tempo todo, em outros nós e com outros IPs. Você quase nunca cria um pod diretamente.
 
-Um **deployment** é o que você cria no lugar. Ele declara qual imagem rodar, quantas réplicas manter e como trocar de versão. Quando você muda a imagem de `0.1.1` para `0.1.2`, o deployment faz um *rolling update*: sobe pods novos aos poucos e só derruba os antigos quando os novos estão prontos. O capítulo 6 volta a essa e a outras estratégias de deploy.
+Um **deployment** é o que você cria no lugar. Ele declara qual imagem rodar, quantas réplicas manter e como trocar de versão. Quando você muda a imagem de `0.1.1` para `0.1.2`, o deployment faz um *rolling update*: sobe pods novos aos poucos e só derruba os antigos quando os novos estão prontos. É trocar o pneu com o carro andando, com a diferença de que aqui funciona. O capítulo 6 volta a essa e a outras estratégias de deploy.
 
-Um **service** resolve o problema dos IPs que mudam. Ele dá um nome e um IP estáveis para um grupo de pods, escolhido por rótulos (*labels*), e distribui as requisições entre eles. O Nginx, ou qualquer outro pod, chama `http://rango-api` e o service entrega para um dos pods vivos naquele momento. Funciona como uma interface estável na frente de implementações que vêm e vão.
+Um **service** resolve o problema dos IPs que mudam. Ele dá um nome e um IP estáveis para um grupo de pods, escolhido por rótulos (*labels*), e distribui as requisições entre eles. O Nginx, ou qualquer outro pod, chama `http://rango-api` e o service entrega para um dos pods vivos naquele momento. Funciona como uma interface estável na frente de implementações que vêm e vão. É o telefone fixo da pizzaria: os entregadores mudam todo dia, mas o número para pedir continua o mesmo.
 
 Existem muitos outros objetos (Ingress para tráfego externo, ConfigMap e Secret para configuração, por exemplo), mas com esses quatro você já consegue ler a maior parte dos arquivos de um projeto real.
 
-### Mão na massa: o Rangô num cluster local
+### Na prática: o Rangô num cluster local
 
-Para experimentar sem gastar nada, use o **kind** (*Kubernetes in Docker*), que cria um cluster inteiro dentro de containers no seu notebook. Pré-requisitos: Docker, `kind` e `kubectl` instalados (as páginas oficiais têm instaladores para cada sistema operacional).
+Para experimentar sem gastar nada, existe o **kind** (*Kubernetes in Docker*), que cria um cluster inteiro dentro de containers no seu notebook. É container rodando Kubernetes que roda containers, e se isso deu um nó na sua cabeça, é porque você entendeu. Os pré-requisitos são Docker, `kind` e `kubectl` instalados (as páginas oficiais têm instaladores para cada sistema operacional).
 
-Crie o cluster e carregue nele a imagem que você construiu, já que o cluster não enxerga as imagens locais do seu Docker:
+O primeiro passo cria o cluster e carrega nele a imagem construída antes, já que o cluster não enxerga as imagens locais do seu Docker:
 
 ```bash
 kind create cluster --name rango
 kind load docker-image rango-api:0.1.1 --name rango
 ```
 
-Agora descreva o estado desejado em `k8s/api.yaml`, na raiz do projeto:
+O estado desejado fica descrito em `k8s/api.yaml`, na raiz do projeto:
 
 ```yaml
 # k8s/api.yaml
@@ -557,7 +557,7 @@ spec:
 
 O deployment pede três réplicas. O `readinessProbe` só libera tráfego para um pod depois que `/health` responder, um primeiro *health check* que o capítulo 4 aprofunda. O bloco `resources` reserva um décimo de núcleo (`100m`) e 128 MB por pod e mata o que passar de 256 MB. O service seleciona os pods com o rótulo `app: rango-api` e liga a porta 80 à 8000 deles.
 
-Aplique e observe:
+A aplicação do arquivo e a listagem dos pods:
 
 ```bash
 kubectl apply -f k8s/api.yaml
@@ -571,16 +571,16 @@ rango-api-6b8f7d9c5f-h7vzn   1/1     Running   0          15s
 rango-api-6b8f7d9c5f-tq4lm   1/1     Running   0          15s
 ```
 
-Agora a parte divertida. Apague um pod, como se o servidor dele tivesse pegado fogo, e liste de novo:
+Agora a parte divertida: apagar um pod, como se o servidor dele tivesse pegado fogo, e listar de novo:
 
 ```bash
 kubectl delete pod rango-api-6b8f7d9c5f-2xkqp
 kubectl get pods
 ```
 
-Em poucos segundos, aparece um pod com outro nome no lugar do apagado. Você não pediu isso. O deployment continua declarando três réplicas, o estado atual tinha duas, e a reconciliação resolveu a diferença. (Use o nome que apareceu no seu terminal; o sufixo é aleatório.)
+Em poucos segundos, aparece um pod com outro nome no lugar do apagado. Você não pediu isso. O deployment continua declarando três réplicas, o estado atual tinha duas, e a reconciliação resolveu a diferença. É a hidra da mitologia grega com outra contabilidade: na lenda, cada cabeça cortada virava duas; o Kubernetes repõe exatamente uma. (Numa execução real, o nome é outro; o sufixo é aleatório.)
 
-Para acessar o service a partir do notebook, abra um túnel temporário:
+O acesso ao service a partir do notebook passa por um túnel temporário:
 
 ```bash
 kubectl port-forward service/rango-api 8000:80
@@ -588,7 +588,7 @@ kubectl port-forward service/rango-api 8000:80
 
 E, em outro terminal, `curl http://localhost:8000/restaurantes` devolve a lista de sempre, atendida por algum dos três pods.
 
-Quando terminar, apague o cluster. Ele consome memória do seu notebook, mas nada fora dele:
+No fim, o cluster é apagado. Ele consome memória do notebook, mas nada fora dele:
 
 ```bash
 kind delete cluster --name rango
@@ -596,13 +596,13 @@ kind delete cluster --name rango
 
 ### Você precisa de Kubernetes?
 
-Para o Rangô de hoje, não. Uma API, um front e um banco cabem com folga num servidor com Compose, ou nos serviços gerenciados da Parte II. Kubernetes cobra caro em complexidade: control plane, atualizações a cada poucos meses, redes, permissões e muito YAML. Ele compensa com muitos serviços, várias equipes e gente dedicada a operar a plataforma. Mesmo assim, estado desejado, réplicas, health checks e nomes estáveis aparecem em toda plataforma de containers, inclusive nas da AWS. No capítulo 17, o Rangô vai para o Amazon ECS com Fargate, e você vai ver também quando vale escolher o Amazon EKS, a versão gerenciada de Kubernetes da AWS.
+Para o Rangô de hoje, não. Uma API, um front e um banco cabem com folga num servidor com Compose, ou nos serviços gerenciados da Parte II. Kubernetes cobra caro em complexidade: control plane, atualizações a cada poucos meses, redes, permissões e muito YAML. Tanto YAML que o mercado inventou, meio de brincadeira, o cargo de "engenheiro de YAML". Ele compensa com muitos serviços, várias equipes e gente dedicada a operar a plataforma. Adotar Kubernetes para um app com dois restaurantes é como contratar um maestro para tocar campainha. Mesmo assim, estado desejado, réplicas, health checks e nomes estáveis aparecem em toda plataforma de containers, inclusive nas da AWS. No capítulo 17, o Rangô vai para o Amazon ECS com Fargate, e você vai ver também quando vale escolher o Amazon EKS, a versão gerenciada de Kubernetes da AWS.
 
 ## Armadilhas e casos reais
 
-> **Armadilha:** usar a tag `latest`. `latest` é só um nome, sem nenhuma garantia de ser a versão mais nova, e muda de conteúdo a cada push. Dois servidores que baixaram `rango-api:latest` em dias diferentes podem estar rodando códigos diferentes, e o rollback vira adivinhação. Use versões explícitas (`0.1.1`) ou o hash do commit como tag.
+> **Armadilha:** usar a tag `latest`. `latest` é só um nome, sem nenhuma garantia de ser a versão mais nova, e muda de conteúdo a cada push. É o "confia em mim" das tags. Dois servidores que baixaram `rango-api:latest` em dias diferentes podem estar rodando códigos diferentes, e o rollback vira adivinhação. Use versões explícitas (`0.1.1`) ou o hash do commit como tag.
 
-> **Armadilha:** segredos dentro da imagem. Se o Dockerfile fizer `COPY .env .` e depois `RUN rm .env`, o arquivo continua na camada anterior, e qualquer pessoa com acesso à imagem consegue extraí-lo. Valores passados com `ENV` ou `ARG` aparecem em `docker history`. Segredos entram em tempo de execução, por variável de ambiente ou por um gerenciador de segredos, assunto do capítulo 16.
+> **Armadilha:** segredos dentro da imagem. Se o Dockerfile fizer `COPY .env .` e depois `RUN rm .env`, o arquivo continua na camada anterior, e qualquer pessoa com acesso à imagem consegue extraí-lo. Apagar numa camada o que foi copiado na anterior é como apagar uma mensagem no grupo depois que todo mundo já leu. Valores passados com `ENV` ou `ARG` aparecem em `docker history`. Segredos entram em tempo de execução, por variável de ambiente ou por um gerenciador de segredos, assunto do capítulo 16.
 
 > **Na vida real:** em abril de 2021, a Codecov, ferramenta de cobertura de testes usada em pipelines de CI de milhares de empresas, revelou que um erro no processo de criação das suas imagens Docker permitiu que um atacante extraísse uma credencial. Com ela, o atacante alterou o script de upload que os clientes baixavam nos seus pipelines, e o script adulterado passou a enviar as variáveis de ambiente desses pipelines (com tokens e chaves) para um servidor externo. O acesso começou no fim de janeiro e só foi descoberto em abril, quando um cliente notou que o hash do script baixado não batia com o publicado no GitHub.
 
@@ -614,7 +614,7 @@ Para o Rangô de hoje, não. Uma API, um front e um banco cabem com folga num se
 
 > **Dica:** a imagem `python:3.12` completa passa de 1 GB; a `python:3.12-slim` fica perto de um décimo disso (valores aproximados). Imagens menores baixam mais rápido e trazem menos programas com falhas conhecidas. Evite o Alpine para Python: com a biblioteca C dele (musl), muitos pacotes compilam do zero.
 
-> **Na vida real:** em fevereiro de 2018, a empresa de segurança RedLock relatou que atacantes encontraram um console administrativo do Kubernetes da Tesla acessível pela internet sem senha. Num dos pods havia credenciais da conta de nuvem da empresa, e os atacantes usaram o cluster para minerar criptomoeda, escondendo o tráfego para dificultar a detecção. Um painel de administração exposto é uma porta aberta para toda a infraestrutura que ele controla.
+> **Na vida real:** em fevereiro de 2018, a empresa de segurança RedLock relatou que atacantes encontraram um console administrativo do Kubernetes da Tesla acessível pela internet sem senha. Num dos pods havia credenciais da conta de nuvem da empresa, e os atacantes usaram o cluster para minerar criptomoeda, escondendo o tráfego para dificultar a detecção. Alguém minerou criptomoeda, e quem pagou pela capacidade de processamento foi a Tesla. Um painel de administração exposto é uma porta aberta para toda a infraestrutura que ele controla.
 
 ## Resumo
 
@@ -630,9 +630,9 @@ Para o Rangô de hoje, não. Uma API, um front e um banco cabem com folga num se
 
 ## Ponte: o dia em que o Rangô apareceu na TV
 
-O Rangô agora tem um pacote que roda igual em qualquer lugar e um proxy que cuida do TLS. Coloque isso num servidor com 2 vCPUs, e ele aguenta tranquilo as poucas centenas de pedidos por dia da fase atual.
+O Rangô agora tem um pacote que roda igual em qualquer lugar e um proxy que cuida do TLS. Num servidor com 2 vCPUs, ele aguenta tranquilo as poucas centenas de pedidos por dia da fase atual.
 
-Até a terça-feira em que a sua sócia liga, eufórica: um programa de culinária da TV vai mostrar a Cantina da Nona na quinta, e o apresentador vai dizer o nome do Rangô ao vivo. Você faz as contas. Se uma fração pequena dos espectadores abrir o app nos minutos seguintes, o tráfego multiplica por cinquenta. As três réplicas que você viu no kind rodavam todas no seu notebook. No servidor, o processador vai a 100%, as requisições começam a esperar na fila do Nginx, e o tempo de resposta passa de 80 milissegundos para 12 segundos. Um servidor só não aguenta. Compra-se um maior ou vários pequenos? Como a sua sócia, digitando `rango.com.br`, chega ao servidor que está menos ocupado? E o que acontece com quem estava no meio de um pedido quando o servidor caiu? No próximo capítulo, você vai ver como uma arquitetura escala de verdade.
+Até a terça-feira em que a sua sócia liga, eufórica: um programa de culinária da TV vai mostrar a Cantina da Nona na quinta, e o apresentador vai dizer o nome do Rangô ao vivo. Ela já está escolhendo a roupa para assistir; você já está procurando o antiácido. Você faz as contas. Se uma fração pequena dos espectadores abrir o app nos minutos seguintes, o tráfego multiplica por cinquenta. As três réplicas que você viu no kind rodavam todas no seu notebook. No servidor, o processador vai a 100%, as requisições começam a esperar na fila do Nginx, e o tempo de resposta passa de 80 milissegundos para 12 segundos. Um servidor só não aguenta. Compra-se um maior ou vários pequenos? Como a sua sócia, digitando `rango.com.br`, chega ao servidor que está menos ocupado? E o que acontece com quem estava no meio de um pedido quando o servidor caiu? No próximo capítulo, você vai ver como uma arquitetura escala de verdade.
 
 ## Referências
 
